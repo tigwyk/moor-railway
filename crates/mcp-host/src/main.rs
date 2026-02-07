@@ -35,15 +35,16 @@
 //!
 //! # Connection Model
 //!
-//! The MCP host supports two connection types:
-//! - **Programmer**: Default connection used for most operations. Uses `--username`/`--password`.
-//! - **Wizard**: Elevated privileges for operations like dump/load. Uses `--wizard-username`/`--wizard-password`.
+//! The MCP host uses a SessionManager that supports:
+//! - **Service connections** (programmer/wizard): Static connections for tool dispatch.
+//!   - **Programmer**: Default connection for most operations. Uses `--username`/`--password`.
+//!   - **Wizard**: Elevated privileges for operations like dump/load. Uses `--wizard-username`/`--wizard-password`.
+//! - **Dynamic player sessions**: Created at runtime via `moo_session_create`/`moo_session_login` tools.
 //!
-//! Connections are established lazily on first use. Most tools default to programmer mode
-//! and accept an optional `wizard: true` parameter for elevated access. Some tools (objdef
+//! Service connections are established lazily on first use. Most tools default to programmer mode
+//! and accept optional `wizard: true` and `session_id` parameters. Some tools (objdef
 //! operations) always require wizard privileges.
 
-mod connection;
 mod mcp_server;
 mod mcp_types;
 mod moor_client;
