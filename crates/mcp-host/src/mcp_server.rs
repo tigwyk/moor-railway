@@ -17,8 +17,8 @@
 //! over stdio using JSON-RPC 2.0.
 
 use crate::mcp_types::*;
-use crate::moor_client::MoorClient;
-use crate::session_manager::SessionManager;
+use crate::moor_client::{LoginMode, MoorClient};
+use crate::session_manager::{SessionManager, SessionStatus};
 use crate::tools::dynamic::{
     DynamicResource, DynamicTool, execute_dynamic_tool, fetch_dynamic_resources,
     fetch_dynamic_tools,
@@ -354,6 +354,105 @@ impl McpServer {
             }),
         });
 
+        // Session lifecycle meta-tools
+        all_tools.push(Tool {
+            name: "moo_session_create".to_string(),
+            description: "Create a new player account and session. Requires account creation \
+                to be enabled via the server's creation policy."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "username": {
+                        "type": "string",
+                        "description": "Username for the new player account"
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "Password for the new player account"
+                    },
+                    "enrollment_token": {
+                        "type": "string",
+                        "description": "Enrollment token (required when creation policy is 'token')"
+                    },
+                    "set_current": {
+                        "type": "boolean",
+                        "description": "Set this session as the current session (default: true)",
+                        "default": true
+                    }
+                },
+                "required": ["username", "password"]
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_session_login".to_string(),
+            description: "Log in to an existing player account, creating a new session."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "username": {
+                        "type": "string",
+                        "description": "Username of the existing player account"
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "Password for the player account"
+                    },
+                    "set_current": {
+                        "type": "boolean",
+                        "description": "Set this session as the current session (default: true)",
+                        "default": true
+                    }
+                },
+                "required": ["username", "password"]
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_session_use".to_string(),
+            description: "Set the current active session. Subsequent tool calls will use this \
+                session's player identity unless overridden with session_id."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to make current"
+                    }
+                },
+                "required": ["session_id"]
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_session_close".to_string(),
+            description: "Close and disconnect a session. Defaults to the current session if \
+                no session_id is provided."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to close (defaults to current session)"
+                    }
+                }
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_sessions_list".to_string(),
+            description: "List all active player sessions with their status."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        });
+
         let result = ToolsListResult { tools: all_tools };
         Ok(serde_json::to_value(result).unwrap())
     }
@@ -371,6 +470,21 @@ impl McpServer {
         }
         if call_params.name == "moo_reconnect" {
             return self.handle_reconnect().await;
+        }
+        if call_params.name == "moo_session_create" {
+            return self.handle_session_create(&call_params.arguments).await;
+        }
+        if call_params.name == "moo_session_login" {
+            return self.handle_session_login(&call_params.arguments).await;
+        }
+        if call_params.name == "moo_session_use" {
+            return self.handle_session_use(&call_params.arguments).await;
+        }
+        if call_params.name == "moo_session_close" {
+            return self.handle_session_close(&call_params.arguments).await;
+        }
+        if call_params.name == "moo_sessions_list" {
+            return self.handle_sessions_list().await;
         }
 
         // Determine if wizard privileges are needed
@@ -424,6 +538,173 @@ impl McpServer {
             Ok(msg) => ToolCallResult::text(msg),
             Err(e) => ToolCallResult::error(format!("Reconnect failed: {}", e)),
         };
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_create meta-tool
+    async fn handle_session_create(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let username = arguments
+            .get("username")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: username"))?;
+        let password = arguments
+            .get("password")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: password"))?;
+        let enrollment_token = arguments
+            .get("enrollment_token")
+            .and_then(|v| v.as_str());
+        let set_current = arguments
+            .get("set_current")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        self.sessions
+            .check_creation_policy(enrollment_token)
+            .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+
+        let (session_id, login_info) = self
+            .sessions
+            .create_session(LoginMode::Create, username, password)
+            .await
+            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+
+        if set_current {
+            self.current_session_id = Some(session_id);
+        }
+
+        let result = ToolCallResult::text(format!(
+            "Session created.\n  session_id: {session_id}\n  player: {}\n  connect_type: {}",
+            login_info.player, login_info.connect_type
+        ));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_login meta-tool
+    async fn handle_session_login(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let username = arguments
+            .get("username")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: username"))?;
+        let password = arguments
+            .get("password")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: password"))?;
+        let set_current = arguments
+            .get("set_current")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let (session_id, login_info) = self
+            .sessions
+            .create_session(LoginMode::Connect, username, password)
+            .await
+            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+
+        if set_current {
+            self.current_session_id = Some(session_id);
+        }
+
+        let result = ToolCallResult::text(format!(
+            "Session created.\n  session_id: {session_id}\n  player: {}\n  connect_type: {}",
+            login_info.player, login_info.connect_type
+        ));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_use meta-tool
+    async fn handle_session_use(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let session_id_str = arguments
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: session_id"))?;
+        let session_id = Uuid::parse_str(session_id_str)
+            .map_err(|e| JsonRpcError::invalid_params(format!("Invalid session_id: {e}")))?;
+
+        // Verify the session exists and is active
+        if self.sessions.get_session(&session_id).is_none() {
+            return Ok(serde_json::to_value(ToolCallResult::error(format!(
+                "Session {session_id} not found or not active"
+            )))
+            .unwrap());
+        }
+
+        self.current_session_id = Some(session_id);
+        let result = ToolCallResult::text(format!("Current session set to {session_id}"));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_close meta-tool
+    async fn handle_session_close(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let session_id = if let Some(id_str) = arguments.get("session_id").and_then(|v| v.as_str())
+        {
+            Uuid::parse_str(id_str)
+                .map_err(|e| JsonRpcError::invalid_params(format!("Invalid session_id: {e}")))?
+        } else if let Some(current) = self.current_session_id {
+            current
+        } else {
+            return Ok(
+                serde_json::to_value(ToolCallResult::error("No session_id provided and no current session is set")).unwrap(),
+            );
+        };
+
+        self.sessions
+            .close_session(&session_id)
+            .await
+            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+
+        if self.current_session_id == Some(session_id) {
+            self.current_session_id = None;
+        }
+
+        let result = ToolCallResult::text(format!("Session {session_id} closed"));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_sessions_list meta-tool
+    async fn handle_sessions_list(&self) -> Result<Value, JsonRpcError> {
+        let sessions = self.sessions.list_sessions();
+        if sessions.is_empty() {
+            return Ok(serde_json::to_value(ToolCallResult::text("No active sessions")).unwrap());
+        }
+
+        let mut lines = Vec::with_capacity(sessions.len() + 1);
+        lines.push(format!("Sessions ({}):", sessions.len()));
+        for s in &sessions {
+            let status = match s.status {
+                SessionStatus::Active => "active",
+                SessionStatus::Errored => "errored",
+                SessionStatus::Expired => "expired",
+            };
+            let current = if self.current_session_id == Some(s.id) {
+                " (current)"
+            } else {
+                ""
+            };
+            let age = s
+                .last_used_at
+                .elapsed()
+                .map(|d| format!("{}s ago", d.as_secs()))
+                .unwrap_or_else(|_| "unknown".to_string());
+            lines.push(format!(
+                "  {}{current}  user={} player={} status={status} last_used={age}",
+                s.id, s.username, s.player
+            ));
+        }
+
+        let result = ToolCallResult::text(lines.join("\n"));
         Ok(serde_json::to_value(result).unwrap())
     }
 

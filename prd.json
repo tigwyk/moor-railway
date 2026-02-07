@@ -77,7 +77,7 @@
         "cargo check passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "This is the main integration story. After this, the old connection.rs is no longer used. Dynamic tool and resource fetching should use programmer_service or wizard_service."
     },
     {
@@ -96,7 +96,7 @@
         "cargo check passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "These are meta-tools handled in mcp_server.rs similar to moo_reconnect and moo_refresh_dynamic_tools. They don't go through the normal client dispatch."
     },
     {

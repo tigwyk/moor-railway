@@ -9,6 +9,12 @@
 - `CreationPolicy` enum (Open/Token/AdminOnly/Disabled) lives in `session_manager.rs`; it implements `FromStr` for clap parsing and `Serialize`/`Deserialize` for figment YAML config
 - `humantime` crate is available in mcp-host for parsing duration strings like "30m", "1h", "300s"
 - CLI args use `String` types for enums/durations, parsed manually after figment extraction, to keep figment YAML compatibility simple
+- `SessionManager` provides `_mut()` variants (`programmer_service_mut`, `wizard_service_mut`, `get_session_client_mut`) that use `Mutex::get_mut()` to bypass locking when `&mut self` is available — preferred for single-threaded `McpServer` usage
+- `McpServer::get_client_for_tool(wizard, session_id)` resolves dispatch: wizard->wizard_service, session_id->session client, current_session->session client, fallback->programmer_service
+- Tool arguments can include `session_id` (optional UUID string) which is extracted in `handle_tools_call` and passed through dispatch
+- Session lifecycle tools (moo_session_create/login/use/close, moo_sessions_list) are meta-tools dispatched directly in `handle_tools_call`, not through the normal client dispatch path
+- `moo_session_create` enforces `check_creation_policy` before creating; `moo_session_login` uses `LoginMode::Connect` (no policy check needed)
+- `set_current` defaults to true on create/login; `moo_session_close` clears `current_session_id` if closing the current session
 
 ## 2026-02-07 - US-001
 Thread: https://ampcode.com/threads/T-019c3a3d-3dab-71ec-acfe-5b8b5ea80e2d
@@ -49,3 +55,33 @@ Thread: https://ampcode.com/threads/T-019c3a40-7306-7303-81ca-a138fcc9e7bd
   - `humantime::parse_duration` handles formats like "30m", "1h", "300s"
   - `CreationPolicy` implements both `FromStr` (for CLI) and serde (for YAML), with `rename_all = "kebab-case"`
   ---
+## 2026-02-07 - US-004
+Thread: https://ampcode.com/threads/T-019c3a44-0577-71a4-936e-354add265b89
+- Replaced `ConnectionManager` with `SessionManager` in `McpServer`
+- Added `current_session_id: Option<Uuid>` to `McpServer`
+- Added `get_client_for_tool(wizard, session_id)` async method for dispatch resolution
+- Added `programmer_service_mut`, `wizard_service_mut`, `get_session_client_mut` methods to `SessionManager` using `Mutex::get_mut()`
+- Added `reconnect_all()` to `SessionManager` that reconnects service clients and active sessions
+- Updated `main.rs` to construct `SessionManager` with all config args (creation_policy, max_sessions, session_idle_ttl, creation_token)
+- All existing tool dispatch, dynamic tool/resource fetching, reconnect, and shutdown flows updated
+- Files changed: `crates/mcp-host/src/mcp_server.rs`, `crates/mcp-host/src/main.rs`, `crates/mcp-host/src/session_manager.rs`
+- **Learnings for future iterations:**
+  - `Mutex::get_mut()` returns `&mut T` without locking when you have `&mut Mutex<T>` — ideal for single-threaded McpServer
+  - `connection.rs` is now fully dead code; all warnings are expected until US-010 removes it
+  - The `session_id` parameter is extracted from tool arguments as an optional UUID string in `handle_tools_call`
+---
+## 2026-02-07 - US-005
+Thread: https://ampcode.com/threads/T-019c3a48-7d78-748f-a133-a621aa699855
+- Added 5 session lifecycle MCP tools as meta-tools in `mcp_server.rs`
+- `moo_session_create`: creates player account + session, enforces creation policy
+- `moo_session_login`: logs into existing account, creates session
+- `moo_session_use`: sets current active session by ID
+- `moo_session_close`: disconnects/removes a session (defaults to current)
+- `moo_sessions_list`: lists all sessions with status, player, last_used
+- All tools registered in `handle_tools_list()` and dispatched in `handle_tools_call()` before normal tool dispatch
+- Files changed: `crates/mcp-host/src/mcp_server.rs`, `prd.json`, `progress.txt`
+- **Learnings for future iterations:**
+  - Meta-tools that need SessionManager access are dispatched early in `handle_tools_call` with explicit `if` checks, before wizard/session_id extraction for normal tools
+  - `ToolCallResult::text()` and `ToolCallResult::error()` are the standard way to return success/error from meta-tools
+  - `SessionStatus` doesn't implement `Display`; format manually with match
+---
