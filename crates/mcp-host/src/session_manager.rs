@@ -471,11 +471,13 @@ impl SessionManager {
         }
     }
 
-    /// Reconnect all established service connections and active sessions.
+    /// Reconnect all established service connections and active/errored sessions.
     ///
-    /// Returns a summary of what was reconnected.
+    /// Returns a summary of what was reconnected and what failed.
+    /// Errored sessions are retried — if they succeed, their status returns to Active.
     pub async fn reconnect_all(&mut self) -> Result<String> {
-        let mut results = Vec::new();
+        let mut succeeded = Vec::new();
+        let mut failed = Vec::new();
 
         // Reconnect programmer service
         if let Some(ref mut svc) = self.programmer_service {
@@ -486,9 +488,12 @@ impl SessionManager {
                         .player()
                         .map(|p| p.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
-                    results.push(format!("programmer ({})", player));
+                    succeeded.push(format!("programmer ({})", player));
                 }
-                Err(e) => warn!("Failed to reconnect programmer service: {}", e),
+                Err(e) => {
+                    warn!("Failed to reconnect programmer service: {}", e);
+                    failed.push(format!("programmer: {}", e));
+                }
             }
         }
 
@@ -501,33 +506,46 @@ impl SessionManager {
                         .player()
                         .map(|p| p.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
-                    results.push(format!("wizard ({})", player));
+                    succeeded.push(format!("wizard ({})", player));
                 }
-                Err(e) => warn!("Failed to reconnect wizard service: {}", e),
+                Err(e) => {
+                    warn!("Failed to reconnect wizard service: {}", e);
+                    failed.push(format!("wizard: {}", e));
+                }
             }
         }
 
-        // Reconnect active sessions
+        // Reconnect active and errored sessions (errored sessions get retried)
         for session in self.sessions.values_mut() {
-            if session.status != SessionStatus::Active {
+            if session.status == SessionStatus::Expired {
                 continue;
             }
             let client = session.client.get_mut().unwrap();
             match client.reconnect_with_backoff(3).await {
                 Ok(()) => {
-                    results.push(format!("session {} ({})", session.id, session.username));
+                    session.status = SessionStatus::Active;
+                    succeeded.push(format!("session {} ({})", session.id, session.username));
                 }
                 Err(e) => {
                     warn!("Failed to reconnect session {}: {}", session.id, e);
                     session.status = SessionStatus::Errored;
+                    failed.push(format!("session {} ({}): {}", session.id, session.username, e));
                 }
             }
         }
 
-        if results.is_empty() {
+        if succeeded.is_empty() && failed.is_empty() {
             return Ok("No connections to reconnect".to_string());
         }
-        Ok(format!("Reconnected: {}", results.join(", ")))
+
+        let mut parts = Vec::new();
+        if !succeeded.is_empty() {
+            parts.push(format!("Reconnected: {}", succeeded.join(", ")));
+        }
+        if !failed.is_empty() {
+            parts.push(format!("Failed: {}", failed.join(", ")));
+        }
+        Ok(parts.join("\n"))
     }
 
     /// Gracefully disconnect all service connections and sessions

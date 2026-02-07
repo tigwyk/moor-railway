@@ -137,3 +137,15 @@ Thread: https://ampcode.com/threads/T-019c3a48-7d78-748f-a133-a621aa699855
   - Meta-tools that need SessionManager access (not just a MoorClient) are dispatched early in `handle_tools_call` before the wizard/session_id extraction for normal tools
   - `NarrativeEventType` needs to be imported into mcp_server.rs for formatting event output
 ---
+## 2026-02-07 - US-009
+- Updated `SessionManager::reconnect_all()` to retry Errored sessions (not just Active ones)
+- On successful reconnect, Errored sessions have status restored to Active
+- Only Expired sessions are skipped during reconnect
+- Result message now explicitly reports both successes and failures (e.g., "Reconnected: ... \n Failed: ...")
+- Service client (programmer/wizard) reconnect failures are also reported in the result message
+- Files changed: `crates/mcp-host/src/session_manager.rs`
+- **Learnings for future iterations:**
+  - Most of US-009's acceptance criteria were already satisfied by `reconnect_all()` from US-004; the main gaps were: errored session retry and explicit failure reporting
+  - `session.status = SessionStatus::Active` must be set on successful reconnect to recover errored sessions
+  - The reconnect result message uses `\n` to separate the "Reconnected" and "Failed" sections for readability in MCP tool output
+---

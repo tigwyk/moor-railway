@@ -167,7 +167,7 @@
         "cargo check passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "Extends the existing moo_reconnect meta-tool. Uses MoorClient::reconnect_with_backoff() which already exists."
     },
     {
