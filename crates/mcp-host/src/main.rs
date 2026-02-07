@@ -56,7 +56,6 @@ use std::time::Duration;
 
 use clap::Parser;
 use clap_derive::Parser;
-use connection::{ConnectionConfig, ConnectionManager, Credentials};
 use eyre::Result;
 use figment::{
     Figment,
@@ -66,7 +65,7 @@ use mcp_server::McpServer;
 use moor_client::MoorClientConfig;
 use rpc_common::client_args::RpcClientArgs;
 use serde_derive::{Deserialize, Serialize};
-use session_manager::CreationPolicy;
+use session_manager::{CreationPolicy, ServiceCredentials, SessionManager};
 use tracing::{info, warn};
 
 /// mooR MCP Host - AI assistant interface for MOO virtual worlds
@@ -162,7 +161,7 @@ async fn main() -> Result<()> {
     let programmer_credentials = match (&args.username, &args.password) {
         (Some(username), Some(password)) => {
             info!("Programmer credentials configured for {}", username);
-            Some(Credentials {
+            Some(ServiceCredentials {
                 username: username.clone(),
                 password: password.clone(),
             })
@@ -173,7 +172,7 @@ async fn main() -> Result<()> {
     let wizard_credentials = match (&args.wizard_username, &args.wizard_password) {
         (Some(username), Some(password)) => {
             info!("Wizard credentials configured for {}", username);
-            Some(Credentials {
+            Some(ServiceCredentials {
                 username: username.clone(),
                 password: password.clone(),
             })
@@ -186,7 +185,7 @@ async fn main() -> Result<()> {
         .creation_policy
         .parse()
         .map_err(|e: String| eyre::eyre!(e))?;
-    let _session_idle_ttl: Duration = humantime::parse_duration(&args.session_idle_ttl)
+    let session_idle_ttl: Duration = humantime::parse_duration(&args.session_idle_ttl)
         .map_err(|e| eyre::eyre!("Invalid session-idle-ttl '{}': {}", args.session_idle_ttl, e))?;
 
     if creation_policy == CreationPolicy::Token && args.creation_token.is_none() {
@@ -199,16 +198,19 @@ async fn main() -> Result<()> {
     info!("Max sessions: {}", args.max_sessions);
     info!("Session idle TTL: {}", args.session_idle_ttl);
 
-    // Create the connection manager
-    let connection_config = ConnectionConfig {
+    // Create the session manager
+    let sessions = SessionManager::new(
         client_config,
         programmer_credentials,
         wizard_credentials,
-    };
-    let connections = ConnectionManager::new(connection_config);
+        args.max_sessions,
+        session_idle_ttl,
+        creation_policy,
+        args.creation_token,
+    );
 
     // Create MCP server
-    let mut server = McpServer::new(connections);
+    let mut server = McpServer::new(sessions);
 
     // Run the MCP server
     info!("MCP server ready, listening on stdio");

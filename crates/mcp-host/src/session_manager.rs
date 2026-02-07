@@ -173,7 +173,7 @@ impl SessionManager {
         }
     }
 
-    /// Get or lazily create the programmer service client
+    /// Get or lazily create the programmer service client (returns Mutex ref)
     pub async fn programmer_service(&mut self) -> Result<&Mutex<MoorClient>> {
         if self.programmer_service.is_none() {
             let creds = self
@@ -188,7 +188,7 @@ impl SessionManager {
         Ok(self.programmer_service.as_ref().unwrap())
     }
 
-    /// Get or lazily create the wizard service client
+    /// Get or lazily create the wizard service client (returns Mutex ref)
     pub async fn wizard_service(&mut self) -> Result<&Mutex<MoorClient>> {
         if self.wizard_service.is_none() {
             let creds = self
@@ -201,6 +201,57 @@ impl SessionManager {
             self.wizard_service = Some(Mutex::new(client));
         }
         Ok(self.wizard_service.as_ref().unwrap())
+    }
+
+    /// Get mutable access to the programmer service client (async, lazily creates)
+    pub async fn programmer_service_mut(&mut self) -> Result<&mut MoorClient> {
+        if self.programmer_service.is_none() {
+            let creds = self
+                .programmer_credentials
+                .as_ref()
+                .ok_or_else(|| eyre!("No programmer credentials configured"))?;
+            let client = self
+                .create_and_login(LoginMode::Connect, &creds.username, &creds.password)
+                .await?;
+            self.programmer_service = Some(Mutex::new(client));
+        }
+        Ok(self
+            .programmer_service
+            .as_mut()
+            .unwrap()
+            .get_mut()
+            .unwrap())
+    }
+
+    /// Get mutable access to the wizard service client (async, lazily creates)
+    pub async fn wizard_service_mut(&mut self) -> Result<&mut MoorClient> {
+        if self.wizard_service.is_none() {
+            let creds = self
+                .wizard_credentials
+                .as_ref()
+                .ok_or_else(|| eyre!("No wizard credentials configured"))?;
+            let client = self
+                .create_and_login(LoginMode::Connect, &creds.username, &creds.password)
+                .await?;
+            self.wizard_service = Some(Mutex::new(client));
+        }
+        Ok(self
+            .wizard_service
+            .as_mut()
+            .unwrap()
+            .get_mut()
+            .unwrap())
+    }
+
+    /// Get mutable access to a session's client by ID
+    pub fn get_session_client_mut(&mut self, id: &Uuid) -> Result<&mut MoorClient> {
+        let session = self
+            .sessions
+            .get_mut(id)
+            .filter(|s| s.status == SessionStatus::Active)
+            .ok_or_else(|| eyre!("Session {} not found or not active", id))?;
+        *session.last_used_at.get_mut().unwrap() = SystemTime::now();
+        Ok(session.client.get_mut().unwrap())
     }
 
     /// Check if wizard credentials are configured
@@ -260,6 +311,13 @@ impl SessionManager {
     /// Get a session by ID, if it exists and is active
     pub fn get_session(&self, id: &Uuid) -> Option<&PlayerSession> {
         self.sessions.get(id).filter(|s| s.status == SessionStatus::Active)
+    }
+
+    /// Get a mutable session by ID, if it exists and is active
+    pub fn get_session_mut(&mut self, id: &Uuid) -> Option<&mut PlayerSession> {
+        self.sessions
+            .get_mut(id)
+            .filter(|s| s.status == SessionStatus::Active)
     }
 
     /// Close and remove a session
@@ -331,6 +389,65 @@ impl SessionManager {
         if !expired_ids.is_empty() {
             info!("Cleaned up {} expired sessions", expired_ids.len());
         }
+    }
+
+    /// Reconnect all established service connections and active sessions.
+    ///
+    /// Returns a summary of what was reconnected.
+    pub async fn reconnect_all(&mut self) -> Result<String> {
+        let mut results = Vec::new();
+
+        // Reconnect programmer service
+        if let Some(ref mut svc) = self.programmer_service {
+            let client = svc.get_mut().unwrap();
+            match client.reconnect_with_backoff(3).await {
+                Ok(()) => {
+                    let player = client
+                        .player()
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    results.push(format!("programmer ({})", player));
+                }
+                Err(e) => warn!("Failed to reconnect programmer service: {}", e),
+            }
+        }
+
+        // Reconnect wizard service
+        if let Some(ref mut svc) = self.wizard_service {
+            let client = svc.get_mut().unwrap();
+            match client.reconnect_with_backoff(3).await {
+                Ok(()) => {
+                    let player = client
+                        .player()
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    results.push(format!("wizard ({})", player));
+                }
+                Err(e) => warn!("Failed to reconnect wizard service: {}", e),
+            }
+        }
+
+        // Reconnect active sessions
+        for session in self.sessions.values_mut() {
+            if session.status != SessionStatus::Active {
+                continue;
+            }
+            let client = session.client.get_mut().unwrap();
+            match client.reconnect_with_backoff(3).await {
+                Ok(()) => {
+                    results.push(format!("session {} ({})", session.id, session.username));
+                }
+                Err(e) => {
+                    warn!("Failed to reconnect session {}: {}", session.id, e);
+                    session.status = SessionStatus::Errored;
+                }
+            }
+        }
+
+        if results.is_empty() {
+            return Ok("No connections to reconnect".to_string());
+        }
+        Ok(format!("Reconnected: {}", results.join(", ")))
     }
 
     /// Gracefully disconnect all service connections and sessions

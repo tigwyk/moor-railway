@@ -16,9 +16,9 @@
 //! This module implements the Model Context Protocol server that communicates
 //! over stdio using JSON-RPC 2.0.
 
-use crate::connection::ConnectionManager;
 use crate::mcp_types::*;
 use crate::moor_client::MoorClient;
+use crate::session_manager::SessionManager;
 use crate::tools::dynamic::{
     DynamicResource, DynamicTool, execute_dynamic_tool, fetch_dynamic_resources,
     fetch_dynamic_tools,
@@ -28,13 +28,16 @@ use eyre::Result;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 /// MCP protocol version we support
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// MCP Server state
 pub struct McpServer {
-    connections: ConnectionManager,
+    sessions: SessionManager,
+    /// Currently selected player session (if any)
+    current_session_id: Option<Uuid>,
     initialized: bool,
     shutdown_requested: bool,
     /// Dynamically-defined tools fetched from the MOO world
@@ -48,10 +51,11 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Create a new MCP server with a connection manager
-    pub fn new(connections: ConnectionManager) -> Self {
+    /// Create a new MCP server with a session manager
+    pub fn new(sessions: SessionManager) -> Self {
         Self {
-            connections,
+            sessions,
+            current_session_id: None,
             initialized: false,
             shutdown_requested: false,
             dynamic_tools: Vec::new(),
@@ -61,14 +65,47 @@ impl McpServer {
         }
     }
 
+    /// Resolve the appropriate MoorClient for a tool call.
+    ///
+    /// Resolution order:
+    /// 1. `wizard` is true -> wizard service client
+    /// 2. `session_id_param` is Some -> that session's client
+    /// 3. `self.current_session_id` is Some -> current session's client
+    /// 4. Fallback -> programmer service client
+    async fn get_client_for_tool(
+        &mut self,
+        wizard: bool,
+        session_id_param: Option<&Uuid>,
+    ) -> Result<&mut MoorClient, String> {
+        if wizard {
+            return self
+                .sessions
+                .wizard_service_mut()
+                .await
+                .map_err(|e| e.to_string());
+        }
+
+        if let Some(sid) = session_id_param.or(self.current_session_id.as_ref()) {
+            let sid = *sid;
+            return self
+                .sessions
+                .get_session_client_mut(&sid)
+                .map_err(|e| e.to_string());
+        }
+
+        self.sessions
+            .programmer_service_mut()
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// Refresh dynamic tools from the MOO world
     ///
     /// Calls #0:external_agent_tools() and updates the stored tool list.
     async fn refresh_dynamic_tools(&mut self) -> Result<usize, String> {
-        // Use programmer connection for fetching tools
         let client = self
-            .connections
-            .programmer()
+            .sessions
+            .programmer_service_mut()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -93,8 +130,8 @@ impl McpServer {
     /// Calls #0:external_agent_resources() and updates the stored resource list.
     async fn refresh_dynamic_resources(&mut self) -> Result<usize, String> {
         let client = self
-            .connections
-            .programmer()
+            .sessions
+            .programmer_service_mut()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -178,7 +215,7 @@ impl McpServer {
         }
 
         // Gracefully disconnect from daemon
-        self.connections.disconnect_all().await;
+        self.sessions.disconnect_all().await;
 
         Ok(())
     }
@@ -260,10 +297,10 @@ impl McpServer {
         info!("Initializing MCP server");
 
         // Log configured connections (connections are established lazily on first use)
-        if self.connections.has_programmer_credentials() {
+        if self.sessions.has_programmer_credentials() {
             info!("Programmer connection configured (will connect on first use)");
         }
-        if self.connections.has_wizard_credentials() {
+        if self.sessions.has_wizard_credentials() {
             info!("Wizard connection configured (will connect on first use)");
         }
 
@@ -354,8 +391,15 @@ impl McpServer {
             );
         }
 
+        // Extract optional session_id from tool arguments
+        let session_id = call_params
+            .arguments
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
+
         // Execute the tool with automatic reconnection on connection failures
-        self.execute_tool_with_reconnect(&call_params, dynamic_tool.as_ref(), wizard)
+        self.execute_tool_with_reconnect(&call_params, dynamic_tool.as_ref(), wizard, session_id.as_ref())
             .await
     }
 
@@ -373,10 +417,10 @@ impl McpServer {
 
     /// Handle the reconnect meta-tool
     ///
-    /// Reconnects all established connections (both programmer and wizard).
+    /// Reconnects all service connections and active player sessions.
     async fn handle_reconnect(&mut self) -> Result<Value, JsonRpcError> {
-        info!("Manual reconnect requested for all connections");
-        let result = match self.connections.reconnect_all().await {
+        info!("Manual reconnect requested for all connections and sessions");
+        let result = match self.sessions.reconnect_all().await {
             Ok(msg) => ToolCallResult::text(msg),
             Err(e) => ToolCallResult::error(format!("Reconnect failed: {}", e)),
         };
@@ -389,12 +433,12 @@ impl McpServer {
         call_params: &ToolCallParams,
         dynamic_tool: Option<&DynamicTool>,
         wizard: bool,
+        session_id: Option<&Uuid>,
     ) -> Result<Value, JsonRpcError> {
         let client = self
-            .connections
-            .get(wizard)
+            .get_client_for_tool(wizard, session_id)
             .await
-            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+            .map_err(JsonRpcError::internal_error)?;
 
         let result = Self::execute_tool_dispatch(client, call_params, dynamic_tool).await;
 
@@ -411,24 +455,21 @@ impl McpServer {
                     error_str
                 );
 
-                self.connections
-                    .reconnect(wizard)
-                    .await
-                    .map_err(|reconnect_err| {
-                        error!("Reconnection failed: {}", reconnect_err);
-                        JsonRpcError::internal_error(format!(
-                            "Connection lost and reconnection failed: {}. Original error: {}",
-                            reconnect_err, error_str
-                        ))
-                    })?;
+                // Reconnect the appropriate client
+                let _ = self.sessions.reconnect_all().await.map_err(|reconnect_err| {
+                    error!("Reconnection failed: {}", reconnect_err);
+                    JsonRpcError::internal_error(format!(
+                        "Connection lost and reconnection failed: {}. Original error: {}",
+                        reconnect_err, error_str
+                    ))
+                })?;
 
                 info!("Reconnected successfully, retrying tool call");
 
                 let client = self
-                    .connections
-                    .get(wizard)
+                    .get_client_for_tool(wizard, session_id)
                     .await
-                    .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+                    .map_err(JsonRpcError::internal_error)?;
 
                 let retry_result = Self::execute_tool_dispatch(client, call_params, dynamic_tool)
                     .await
@@ -510,8 +551,8 @@ impl McpServer {
 
         // Fall back to static resource handling
         let client = self
-            .connections
-            .programmer()
+            .sessions
+            .programmer_service_mut()
             .await
             .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
 

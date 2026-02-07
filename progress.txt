@@ -1,0 +1,51 @@
+## Codebase Patterns
+- MCP host crate is at `crates/mcp-host/src/`; main source files: `moor_client.rs`, `mcp_server.rs`, `connection.rs`, `main.rs`
+- `MoorClient` wraps ZMQ RPC calls to the mooR daemon; login uses `mk_login_command_msg` with connect_args vec where args[0] is the verb ("connect" or "create")
+- `Obj` implements `Copy`, so don't use `.clone()` on it (clippy catches this)
+- Login result from daemon includes: `success`, `auth_token`, `connect_type` (ConnectType enum), `player` (Obj), `player_flags` (u16) — defined in `moor_rpc.fbs`
+- Reconnection always uses `LoginMode::Connect` regardless of original mode, since the player already exists after creation
+- Clippy enforces collapsible `if let` chains — use `&&` syntax for nested `if let` guards
+- `SessionManager` in `session_manager.rs` manages dynamic player sessions; `ConnectionManager` in `connection.rs` is the old static approach (will be replaced in US-004)
+- `CreationPolicy` enum (Open/Token/AdminOnly/Disabled) lives in `session_manager.rs`; it implements `FromStr` for clap parsing and `Serialize`/`Deserialize` for figment YAML config
+- `humantime` crate is available in mcp-host for parsing duration strings like "30m", "1h", "300s"
+- CLI args use `String` types for enums/durations, parsed manually after figment extraction, to keep figment YAML compatibility simple
+
+## 2026-02-07 - US-001
+Thread: https://ampcode.com/threads/T-019c3a3d-3dab-71ec-acfe-5b8b5ea80e2d
+- Added `LoginMode` enum (Connect, Create) and `LoginInfo` struct to `moor_client.rs`
+- Added `login_with_mode()` method; existing `login()` delegates to it with `LoginMode::Connect`
+- `perform_login()` now accepts `LoginMode` and returns `Result<LoginInfo>` with player, connect_type, and player_flags
+- Stored credentials tuple expanded to `(LoginMode, String, String)` for reconnection support
+- Reconnect always uses `LoginMode::Connect` (player already exists after creation)
+- Files changed: `crates/mcp-host/src/moor_client.rs`
+- **Learnings for future iterations:**
+  - The flatbuffer schema at `crates/schema/schema/moor_rpc.fbs` defines the RPC message types
+  - `ConnectType` enum: Connected=0, Reconnected=1, Created=2, NoConnect=255
+  - `login_result.connect_type()` and `login_result.player_flags()` are available but weren't previously extracted
+---
+## 2026-02-07 - US-002
+Thread: https://ampcode.com/threads/T-019c3a40-7306-7303-81ca-a138fcc9e7bd
+- Created `session_manager.rs` with `PlayerSession`, `SessionManager`, `SessionStatus`, `SessionInfo`, `ServiceCredentials` structs
+- `SessionManager` holds config, optional programmer/wizard service clients (lazy), sessions HashMap, max_sessions, and session_idle_ttl
+- Methods: `new`, `create_session`, `get_session`, `close_session`, `list_sessions`, `cleanup_expired_sessions`, `disconnect_all`, `programmer_service`, `wizard_service`
+- Added `mod session_manager` to main.rs
+- Files changed: `crates/mcp-host/src/session_manager.rs` (new), `crates/mcp-host/src/main.rs`
+- **Learnings for future iterations:**
+  - Clippy enforces collapsible `if let` chains — use `&&` syntax for nested `if let` with `let Err(e)` guards
+  - `SessionManager` uses `Mutex<MoorClient>` (not async Mutex) since MoorClient ops are short RPC calls
+  - Service clients (programmer/wizard) are created lazily on first access, same pattern as `ConnectionManager`
+  ---
+  ## 2026-02-07 - US-003
+  Thread: https://ampcode.com/threads/T-019c3a42-0e47-711e-8959-88c0f22da68e
+  - Added `CreationPolicy` enum with Open, Token, AdminOnly, Disabled variants to `session_manager.rs`
+  - Added `check_creation_policy(provided_token)` method to `SessionManager`
+  - Added CLI args: `--creation-policy`, `--creation-token`, `--max-sessions`, `--session-idle-ttl`
+  - All args also configurable via YAML config file (figment merge)
+  - Validates token policy requires `--creation-token` at startup
+  - Added `humantime` dependency for duration string parsing
+  - Files changed: `crates/mcp-host/Cargo.toml`, `crates/mcp-host/src/session_manager.rs`, `crates/mcp-host/src/main.rs`
+  - **Learnings for future iterations:**
+  - Use `String` for CLI arg types when figment YAML needs to parse them too, then convert manually after extraction
+  - `humantime::parse_duration` handles formats like "30m", "1h", "300s"
+  - `CreationPolicy` implements both `FromStr` (for CLI) and serde (for YAML), with `rename_all = "kebab-case"`
+  ---
