@@ -149,3 +149,15 @@ Thread: https://ampcode.com/threads/T-019c3a48-7d78-748f-a133-a621aa699855
   - `session.status = SessionStatus::Active` must be set on successful reconnect to recover errored sessions
   - The reconnect result message uses `\n` to separate the "Reconnected" and "Failed" sections for readability in MCP tool output
 ---
+## 2026-02-07 - US-010
+- Deleted `connection.rs` (ConnectionManager fully replaced by SessionManager)
+- Removed `mod connection;` declaration from `main.rs`
+- Updated doc comment in `main.rs` to reflect session-based connection model
+- Verified: cargo check passes, cargo test passes (0 tests), cargo clippy passes with no new warnings
+- Pre-existing dead code warnings are from public API methods added in US-001 through US-009 (not related to connection module)
+- Files changed: `crates/mcp-host/src/connection.rs` (deleted), `crates/mcp-host/src/main.rs`
+- **Learnings for future iterations:**
+  - The cleanup was minimal because US-004 already fully replaced all ConnectionManager usage with SessionManager
+  - Only two references existed: the `mod connection;` declaration and the file itself — no `use` imports anywhere
+  - Dead code warnings for unused `pub` methods are expected in library-like code that exposes an API; they don't indicate problems
+---

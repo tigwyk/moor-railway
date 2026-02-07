@@ -183,7 +183,7 @@
         "cargo clippy passes with no new warnings"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "Final cleanup story. Should be trivial if US-004 was done correctly."
     }
   ]
