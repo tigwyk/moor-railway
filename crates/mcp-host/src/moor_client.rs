@@ -351,6 +351,21 @@ impl MoorClient {
         self.player.as_ref()
     }
 
+    /// Get the client UUID (used for event subscription topics)
+    pub fn client_id(&self) -> Uuid {
+        self.client_id
+    }
+
+    /// Get the ZMQ context (for creating additional subscribers)
+    pub fn zmq_context(&self) -> &tmq::Context {
+        &self.zmq_context
+    }
+
+    /// Get the client config
+    pub fn config(&self) -> &MoorClientConfig {
+        &self.config
+    }
+
     /// Clear connection state without sending detach message
     fn clear_connection_state(&mut self) {
         // Stop the ping responder if running

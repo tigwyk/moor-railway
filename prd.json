@@ -132,7 +132,7 @@
         "cargo check passes"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "Modeled after the existing ping responder pattern in MoorClient — background task with kill switch. Uses the ZMQ events subscriber."
     },
     {

@@ -17,14 +17,21 @@
 //! Service connections (programmer, wizard) are held separately for tool dispatch
 //! that doesn't belong to a specific player session.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use eyre::{Result, eyre};
+use moor_common::tasks::Event;
+use moor_schema::convert::narrative_event_from_ref;
 use moor_var::Obj;
+use rpc_async_client::pubsub_client::events_recv;
+use rpc_async_client::zmq;
 use serde_derive::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tmq::subscribe;
+use tokio::task::JoinHandle;
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::moor_client::{LoginInfo, LoginMode, MoorClient, MoorClientConfig};
@@ -70,6 +77,26 @@ impl std::str::FromStr for CreationPolicy {
     }
 }
 
+/// Maximum number of events to buffer per session before dropping oldest
+const MAX_EVENT_BUFFER: usize = 1000;
+
+/// Type of narrative event for the buffer
+#[derive(Debug, Clone)]
+pub enum NarrativeEventType {
+    Notify,
+    Traceback,
+    Present,
+    Unpresent,
+}
+
+/// A buffered narrative event from the daemon
+#[derive(Debug, Clone)]
+pub struct BufferedEvent {
+    pub event_type: NarrativeEventType,
+    pub content: String,
+    pub timestamp: SystemTime,
+}
+
 /// Status of a player session
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionStatus {
@@ -87,6 +114,39 @@ pub struct PlayerSession {
     pub last_used_at: Mutex<SystemTime>,
     pub client: Mutex<MoorClient>,
     pub status: SessionStatus,
+    /// Bounded buffer of narrative events from the daemon
+    event_buffer: Arc<Mutex<VecDeque<BufferedEvent>>>,
+    /// Kill switch for the event subscription background task
+    event_kill_switch: Arc<AtomicBool>,
+    /// Handle to the background event subscription task
+    event_task_handle: Option<JoinHandle<()>>,
+}
+
+impl PlayerSession {
+    /// Drain and return all buffered events, clearing the buffer.
+    pub fn drain_events(&self) -> Vec<BufferedEvent> {
+        let mut buffer = self.event_buffer.lock().unwrap();
+        buffer.drain(..).collect()
+    }
+
+    /// Get the current number of buffered events.
+    pub fn event_count(&self) -> usize {
+        self.event_buffer.lock().unwrap().len()
+    }
+
+    /// Stop the event subscription background task.
+    fn stop_event_subscription(&mut self) {
+        self.event_kill_switch.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.event_task_handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+impl Drop for PlayerSession {
+    fn drop(&mut self) {
+        self.stop_event_subscription();
+    }
 }
 
 /// Serializable summary of a session for listing
@@ -289,6 +349,18 @@ impl SessionManager {
         let session_id = Uuid::new_v4();
         let now = SystemTime::now();
 
+        // Create the event buffer and kill switch before starting the background task
+        let event_buffer = Arc::new(Mutex::new(VecDeque::new()));
+        let event_kill_switch = Arc::new(AtomicBool::new(false));
+
+        // Start the background event subscription task
+        let event_task_handle = self.start_event_subscription(
+            &client,
+            session_id,
+            event_buffer.clone(),
+            event_kill_switch.clone(),
+        )?;
+
         let session = PlayerSession {
             id: session_id,
             username: username.to_string(),
@@ -297,6 +369,9 @@ impl SessionManager {
             last_used_at: Mutex::new(now),
             client: Mutex::new(client),
             status: SessionStatus::Active,
+            event_buffer,
+            event_kill_switch,
+            event_task_handle: Some(event_task_handle),
         };
 
         info!(
@@ -322,15 +397,15 @@ impl SessionManager {
 
     /// Close and remove a session
     pub async fn close_session(&mut self, id: &Uuid) -> Result<()> {
-        let session = self
+        let mut session = self
             .sessions
             .remove(id)
             .ok_or_else(|| eyre!("Session {} not found", id))?;
 
-        let mut client = session
-            .client
-            .into_inner()
-            .map_err(|_| eyre!("Failed to acquire session client lock"))?;
+        // Stop the event subscription task before disconnecting
+        session.stop_event_subscription();
+
+        let client = session.client.get_mut().unwrap();
         if let Err(e) = client.disconnect().await {
             warn!("Error disconnecting session {}: {}", id, e);
         }
@@ -477,6 +552,96 @@ impl SessionManager {
         info!("All connections and sessions disconnected");
     }
 
+    /// Start a background task that subscribes to narrative events for a session's client.
+    ///
+    /// The task receives events via ZMQ, parses narrative content, and stores it in
+    /// the provided bounded buffer. Follows the same ZMQ subscriber pattern as
+    /// the ping responder in MoorClient.
+    fn start_event_subscription(
+        &self,
+        client: &MoorClient,
+        session_id: Uuid,
+        buffer: Arc<Mutex<VecDeque<BufferedEvent>>>,
+        kill_switch: Arc<AtomicBool>,
+    ) -> Result<JoinHandle<()>> {
+        let client_id = client.client_id();
+        let zmq_context = client.zmq_context().clone();
+        let config = client.config().clone();
+
+        // Create events subscriber (same pattern as create_events_subscriber in MoorClient)
+        let mut socket_builder = subscribe(&zmq_context);
+
+        if let Some((client_secret, client_public, server_public)) = &config.curve_keys {
+            let client_secret_bytes =
+                zmq::z85_decode(client_secret).map_err(|_| eyre!("Invalid client secret key"))?;
+            let client_public_bytes =
+                zmq::z85_decode(client_public).map_err(|_| eyre!("Invalid client public key"))?;
+            let server_public_bytes =
+                zmq::z85_decode(server_public).map_err(|_| eyre!("Invalid server public key"))?;
+
+            socket_builder = socket_builder
+                .set_curve_secretkey(&client_secret_bytes)
+                .set_curve_publickey(&client_public_bytes)
+                .set_curve_serverkey(&server_public_bytes);
+        }
+
+        let events_sub = socket_builder
+            .connect(&config.events_address)
+            .map_err(|e| eyre!("Unable to connect events subscriber: {}", e))?;
+
+        // Subscribe to this client's events topic
+        let mut events_sub = events_sub
+            .subscribe(&client_id.as_bytes()[..])
+            .map_err(|e| eyre!("Unable to subscribe to client events: {}", e))?;
+
+        let handle = tokio::spawn(async move {
+            debug!(
+                "Event subscription started for session {} (client {})",
+                session_id, client_id
+            );
+
+            loop {
+                if kill_switch.load(Ordering::Relaxed) {
+                    debug!("Event subscription killed for session {}", session_id);
+                    break;
+                }
+
+                match events_recv(client_id, &mut events_sub).await {
+                    Ok(event_msg) => {
+                        let Ok(event) = event_msg.event() else {
+                            continue;
+                        };
+                        let Ok(event_union) = event.event() else {
+                            continue;
+                        };
+
+                        if let Some(buffered) = parse_client_event(event_union) {
+                            let mut buf = buffer.lock().unwrap();
+                            if buf.len() >= MAX_EVENT_BUFFER {
+                                buf.pop_front();
+                            }
+                            buf.push_back(buffered);
+                        }
+                    }
+                    Err(e) => {
+                        if !kill_switch.load(Ordering::Relaxed) {
+                            warn!(
+                                "Error receiving event for session {}: {:?}",
+                                session_id, e
+                            );
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            }
+
+            debug!("Event subscription stopped for session {}", session_id);
+        });
+
+        info!("Event subscription started for session {}", session_id);
+        Ok(handle)
+    }
+
     /// Create a MoorClient, connect, and log in
     async fn create_and_login(
         &self,
@@ -489,5 +654,85 @@ impl SessionManager {
         client.login_with_mode(mode, username, password).await?;
         info!("Service client connected as {}", username);
         Ok(client)
+    }
+}
+
+/// Parse a client event into a BufferedEvent, if it contains narrative content.
+fn parse_client_event(
+    event_union: moor_schema::rpc::ClientEventUnionRef<'_>,
+) -> Option<BufferedEvent> {
+    use moor_schema::rpc::ClientEventUnionRef;
+
+    match event_union {
+        ClientEventUnionRef::NarrativeEventMessage(narrative_msg) => {
+            let event_ref = narrative_msg.event().ok()?;
+            let narrative_event = narrative_event_from_ref(event_ref).ok()?;
+            let (event_type, content) = match &narrative_event.event {
+                Event::Notify { value, .. } => {
+                    (NarrativeEventType::Notify, format_var_for_narrative(value))
+                }
+                Event::Traceback(exception) => (
+                    NarrativeEventType::Traceback,
+                    format!("** {} **", exception.error),
+                ),
+                Event::Present(p) => {
+                    (NarrativeEventType::Present, format!("{:?}", p))
+                }
+                Event::Unpresent(id) => {
+                    (NarrativeEventType::Unpresent, id.clone())
+                }
+                Event::SetConnectionOption { .. } => return None,
+            };
+            trace!("Buffered event: {:?} - {}", event_type, content);
+            Some(BufferedEvent {
+                event_type,
+                content,
+                timestamp: narrative_event.timestamp,
+            })
+        }
+        ClientEventUnionRef::SystemMessageEvent(sys_msg) => {
+            let msg = sys_msg.message().ok()?;
+            Some(BufferedEvent {
+                event_type: NarrativeEventType::Notify,
+                content: msg.to_string(),
+                timestamp: SystemTime::now(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Format a Var for narrative output (mirrors moor_client::format_var_for_narrative)
+fn format_var_for_narrative(var: &moor_var::Var) -> String {
+    use moor_var::Variant;
+    match var.variant() {
+        Variant::Str(s) => s.to_string(),
+        Variant::Int(i) => i.to_string(),
+        Variant::Float(f) => f.to_string(),
+        Variant::Obj(o) => format!("{}", o),
+        Variant::List(l) => {
+            let items: Vec<String> = l.iter().map(|v| format_var_for_narrative(&v)).collect();
+            format!("{{{}}}", items.join(", "))
+        }
+        Variant::Map(m) => {
+            let items: Vec<String> = m
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{} -> {}",
+                        format_var_for_narrative(&k),
+                        format_var_for_narrative(&v)
+                    )
+                })
+                .collect();
+            format!("[{}]", items.join(", "))
+        }
+        Variant::Err(e) => format!("{}", e),
+        Variant::None => "".to_string(),
+        Variant::Sym(s) => format!("'{}", s.as_string()),
+        Variant::Binary(b) => format!("~<{} bytes>~", b.as_bytes().len()),
+        Variant::Lambda(_) => "*lambda*".to_string(),
+        Variant::Bool(b) => if b { "true" } else { "false" }.to_string(),
+        Variant::Flyweight(f) => format!("{:?}", f),
     }
 }

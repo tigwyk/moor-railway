@@ -15,6 +15,9 @@
 - Session lifecycle tools (moo_session_create/login/use/close, moo_sessions_list) are meta-tools dispatched directly in `handle_tools_call`, not through the normal client dispatch path
 - `moo_session_create` enforces `check_creation_policy` before creating; `moo_session_login` uses `LoginMode::Connect` (no policy check needed)
 - `set_current` defaults to true on create/login; `moo_session_close` clears `current_session_id` if closing the current session
+- `PlayerSession` has a background event subscription task (ZMQ subscriber) and implements `Drop` to clean it up; use `drain_events()` to retrieve buffered events
+- ZMQ event subscription uses `events_recv(client_id, &mut subscriber)` and topic filter is `client_id.as_bytes()`; match on `ClientEventUnionRef` variants for event types
+- `MoorClient` exposes `client_id()`, `zmq_context()`, `config()` getters for creating external subscribers
 
 ## 2026-02-07 - US-001
 Thread: https://ampcode.com/threads/T-019c3a3d-3dab-71ec-acfe-5b8b5ea80e2d
@@ -96,4 +99,26 @@ Thread: https://ampcode.com/threads/T-019c3a48-7d78-748f-a133-a621aa699855
   - `add_session_id_param()` follows the same pattern as `with_wizard_param()` — mutating `input_schema.properties` on a Tool
   - The order `add_session_id_param(with_wizard_param(tool))` means both params are present; order doesn't matter since both just insert into properties
   - No changes needed to execute functions or dispatch — they already handle session_id extraction
+---
+## 2026-02-07 - US-007
+- Added `BufferedEvent` struct and `NarrativeEventType` enum to `session_manager.rs` for typed event buffering
+- Added bounded event buffer (`VecDeque` with max 1000 entries) to `PlayerSession`, wrapped in `Arc<Mutex<...>>` for background task sharing
+- Added `event_kill_switch` (`Arc<AtomicBool>`) and `event_task_handle` (`Option<JoinHandle<()>>`) to `PlayerSession`
+- Implemented `start_event_subscription()` on `SessionManager` that creates a ZMQ events subscriber and spawns a background tokio task
+- Background task follows the same ZMQ subscriber pattern as the ping responder in `MoorClient` (CURVE encryption, topic subscription by client_id)
+- Events are parsed via `narrative_event_from_ref()` and categorized into Notify/Traceback/Present/Unpresent types
+- SystemMessageEvent is also captured as Notify type
+- Added `drain_events()` and `event_count()` methods to `PlayerSession`
+- Added `Drop` impl for `PlayerSession` that stops the event subscription task
+- Added `client_id()`, `zmq_context()`, `config()` getter methods to `MoorClient`
+- Updated `close_session` to use `get_mut()` instead of `into_inner()` to avoid partial move issues with Drop
+- Event subscription starts automatically after successful login in `create_session`
+- Added local `format_var_for_narrative()` in session_manager.rs (mirrors moor_client.rs version)
+- Files changed: `crates/mcp-host/src/session_manager.rs`, `crates/mcp-host/src/moor_client.rs`
+- **Learnings for future iterations:**
+  - `events_recv(client_id, subscriber)` returns `ClientEventMessage` which wraps a FlatBuffer; access via `.event()?.event()?` to get `ClientEventUnionRef`
+  - ZMQ events are topic-filtered by `client_id.as_bytes()` — each client only sees its own events
+  - `narrative_event_from_ref()` converts FlatBuffer ref to owned `NarrativeEvent` with `event_id`, `timestamp`, `author`, `event` fields
+  - `PlayerSession` now implements `Drop` — be careful with partial moves; use `get_mut()` instead of `into_inner()` on Mutex fields
+  - The `format_var_for_narrative` function is duplicated between moor_client.rs and session_manager.rs; a future cleanup could extract it to a shared utility
 ---
