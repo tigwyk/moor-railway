@@ -150,7 +150,7 @@
         "cargo check passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "This is a meta-tool like the session lifecycle tools — it needs direct access to the SessionManager, not just a MoorClient."
     },
     {

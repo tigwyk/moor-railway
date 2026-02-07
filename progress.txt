@@ -18,6 +18,7 @@
 - `PlayerSession` has a background event subscription task (ZMQ subscriber) and implements `Drop` to clean it up; use `drain_events()` to retrieve buffered events
 - ZMQ event subscription uses `events_recv(client_id, &mut subscriber)` and topic filter is `client_id.as_bytes()`; match on `ClientEventUnionRef` variants for event types
 - `MoorClient` exposes `client_id()`, `zmq_context()`, `config()` getters for creating external subscribers
+- `PlayerSession::event_buffer_arc()` returns a cloneable `Arc<Mutex<VecDeque<BufferedEvent>>>` for async event polling outside of SessionManager borrow scope
 
 ## 2026-02-07 - US-001
 Thread: https://ampcode.com/threads/T-019c3a3d-3dab-71ec-acfe-5b8b5ea80e2d
@@ -121,4 +122,18 @@ Thread: https://ampcode.com/threads/T-019c3a48-7d78-748f-a133-a621aa699855
   - `narrative_event_from_ref()` converts FlatBuffer ref to owned `NarrativeEvent` with `event_id`, `timestamp`, `author`, `event` fields
   - `PlayerSession` now implements `Drop` — be careful with partial moves; use `get_mut()` instead of `into_inner()` on Mutex fields
   - The `format_var_for_narrative` function is duplicated between moor_client.rs and session_manager.rs; a future cleanup could extract it to a shared utility
+---
+## 2026-02-07 - US-008
+- Added `moo_session_events` meta-tool for polling narrative events from a player session
+- Tool accepts optional `session_id` (defaults to current session) and `timeout_ms` (default: 5000)
+- `timeout_ms: 0` returns immediately with whatever is buffered; `timeout_ms > 0` polls at 50ms intervals until events arrive or timeout
+- Events are drained from the session's buffer and returned as `[timestamp] type: content` lines
+- Added `event_buffer_arc()` method to `PlayerSession` for async polling (clones the `Arc<Mutex<VecDeque<BufferedEvent>>>`)
+- Tool registered in `handle_tools_list()` and dispatched as a meta-tool in `handle_tools_call()`
+- Returns "No events" when buffer is empty after timeout, or clear error when session_id is invalid/missing
+- Files changed: `crates/mcp-host/src/mcp_server.rs`, `crates/mcp-host/src/session_manager.rs`
+- **Learnings for future iterations:**
+  - For async polling of synchronous `Mutex<VecDeque>` buffers, clone the `Arc` to release the borrow on SessionManager, then poll with `tokio::time::sleep` intervals
+  - Meta-tools that need SessionManager access (not just a MoorClient) are dispatched early in `handle_tools_call` before the wizard/session_id extraction for normal tools
+  - `NarrativeEventType` needs to be imported into mcp_server.rs for formatting event output
 ---

@@ -134,6 +134,11 @@ impl PlayerSession {
         self.event_buffer.lock().unwrap().len()
     }
 
+    /// Get a clone of the event buffer Arc for async polling.
+    pub fn event_buffer_arc(&self) -> Arc<Mutex<VecDeque<BufferedEvent>>> {
+        self.event_buffer.clone()
+    }
+
     /// Stop the event subscription background task.
     fn stop_event_subscription(&mut self) {
         self.event_kill_switch.store(true, Ordering::Relaxed);

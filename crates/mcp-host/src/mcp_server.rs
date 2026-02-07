@@ -18,7 +18,8 @@
 
 use crate::mcp_types::*;
 use crate::moor_client::{LoginMode, MoorClient};
-use crate::session_manager::{SessionManager, SessionStatus};
+use crate::session_manager::{NarrativeEventType, SessionManager, SessionStatus};
+use std::time::SystemTime;
 use crate::tools::dynamic::{
     DynamicResource, DynamicTool, execute_dynamic_tool, fetch_dynamic_resources,
     fetch_dynamic_tools,
@@ -453,6 +454,28 @@ impl McpServer {
             }),
         });
 
+        all_tools.push(Tool {
+            name: "moo_session_events".to_string(),
+            description: "Poll for narrative events from the MOO world for a session. \
+                Returns buffered events and clears them. Use timeout_ms to wait for events \
+                if the buffer is empty."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to poll events for (defaults to current session)"
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Maximum time to wait for events in milliseconds. 0 returns immediately with whatever is buffered (default: 5000)",
+                        "default": 5000
+                    }
+                }
+            }),
+        });
+
         let result = ToolsListResult { tools: all_tools };
         Ok(serde_json::to_value(result).unwrap())
     }
@@ -485,6 +508,9 @@ impl McpServer {
         }
         if call_params.name == "moo_sessions_list" {
             return self.handle_sessions_list().await;
+        }
+        if call_params.name == "moo_session_events" {
+            return self.handle_session_events(&call_params.arguments).await;
         }
 
         // Determine if wizard privileges are needed
@@ -702,6 +728,91 @@ impl McpServer {
                 "  {}{current}  user={} player={} status={status} last_used={age}",
                 s.id, s.username, s.player
             ));
+        }
+
+        let result = ToolCallResult::text(lines.join("\n"));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_events meta-tool
+    async fn handle_session_events(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let session_id = if let Some(id_str) = arguments.get("session_id").and_then(|v| v.as_str())
+        {
+            Uuid::parse_str(id_str)
+                .map_err(|e| JsonRpcError::invalid_params(format!("Invalid session_id: {e}")))?
+        } else if let Some(current) = self.current_session_id {
+            current
+        } else {
+            return Ok(
+                serde_json::to_value(ToolCallResult::error(
+                    "No session_id provided and no current session is set",
+                ))
+                .unwrap(),
+            );
+        };
+
+        let timeout_ms = arguments
+            .get("timeout_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5000);
+
+        // Get the session and clone its event buffer Arc for async polling
+        let buffer_arc = {
+            let session = self.sessions.get_session(&session_id).ok_or_else(|| {
+                JsonRpcError::invalid_params(format!(
+                    "Session {session_id} not found or not active"
+                ))
+            })?;
+            session.event_buffer_arc()
+        };
+
+        // If timeout > 0 and buffer is empty, poll until events arrive or timeout
+        if timeout_ms > 0 {
+            let deadline = tokio::time::Instant::now()
+                + tokio::time::Duration::from_millis(timeout_ms);
+            let poll_interval = tokio::time::Duration::from_millis(50);
+
+            while tokio::time::Instant::now() < deadline {
+                {
+                    let buf = buffer_arc.lock().unwrap();
+                    if !buf.is_empty() {
+                        break;
+                    }
+                }
+                tokio::time::sleep(poll_interval.min(deadline - tokio::time::Instant::now()))
+                    .await;
+            }
+        }
+
+        // Drain the buffer
+        let events: Vec<_> = {
+            let mut buf = buffer_arc.lock().unwrap();
+            buf.drain(..).collect()
+        };
+
+        if events.is_empty() {
+            let result = ToolCallResult::text("No events");
+            return Ok(serde_json::to_value(result).unwrap());
+        }
+
+        let mut lines = Vec::with_capacity(events.len() + 1);
+        lines.push(format!("Events ({}):", events.len()));
+        for event in &events {
+            let type_str = match event.event_type {
+                NarrativeEventType::Notify => "notify",
+                NarrativeEventType::Traceback => "traceback",
+                NarrativeEventType::Present => "present",
+                NarrativeEventType::Unpresent => "unpresent",
+            };
+            let ts = event
+                .timestamp
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| format!("{:.3}", d.as_secs_f64()))
+                .unwrap_or_else(|_| "unknown".to_string());
+            lines.push(format!("  [{}] {}: {}", ts, type_str, event.content));
         }
 
         let result = ToolCallResult::text(lines.join("\n"));
