@@ -251,6 +251,27 @@ pub fn with_wizard_param(mut tool: Tool) -> Tool {
     tool
 }
 
+/// Add the session_id parameter to a tool's input schema
+///
+/// This adds an optional `session_id` string parameter that allows callers
+/// to specify which player session should execute the tool.
+pub fn add_session_id_param(mut tool: Tool) -> Tool {
+    if let Some(properties) = tool.input_schema.get_mut("properties")
+        && let Some(props_obj) = properties.as_object_mut()
+    {
+        props_obj.insert(
+            "session_id".to_string(),
+            json!({
+                "type": "string",
+                "description": "Optional session ID (UUID) to execute this tool as a specific \
+                    player session. Defaults to the current session if not provided."
+            }),
+        );
+    }
+
+    tool
+}
+
 /// Mark a tool as requiring wizard privileges
 ///
 /// These tools always execute with wizard privileges and cannot be used

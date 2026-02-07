@@ -85,3 +85,15 @@ Thread: https://ampcode.com/threads/T-019c3a48-7d78-748f-a133-a621aa699855
   - `ToolCallResult::text()` and `ToolCallResult::error()` are the standard way to return success/error from meta-tools
   - `SessionStatus` doesn't implement `Display`; format manually with match
 ---
+## 2026-02-07 - US-006
+- Added `add_session_id_param()` helper function in `tools/helpers.rs` that adds optional `session_id` (UUID string) property to a tool's input_schema
+- Applied `add_session_id_param()` to all 39 non-wizard-only tools in `get_tools()` via wrapping: `add_session_id_param(with_wizard_param(...))`
+- Wizard-only tools (10 total) do NOT get session_id param — they always use the wizard service connection
+- `moo_reconnect` also excluded — it reconnects everything, not a specific session
+- Session_id extraction and dispatch already implemented in US-004/US-005 (`handle_tools_call` extracts session_id from arguments and passes to `get_client_for_tool`)
+- Files changed: `crates/mcp-host/src/tools/helpers.rs`, `crates/mcp-host/src/tools/mod.rs`
+- **Learnings for future iterations:**
+  - `add_session_id_param()` follows the same pattern as `with_wizard_param()` — mutating `input_schema.properties` on a Tool
+  - The order `add_session_id_param(with_wizard_param(tool))` means both params are present; order doesn't matter since both just insert into properties
+  - No changes needed to execute functions or dispatch — they already handle session_id extraction
+---

@@ -37,7 +37,7 @@ mod verbs;
 use crate::mcp_types::{Tool, ToolCallResult};
 use crate::moor_client::MoorClient;
 use eyre::Result;
-use helpers::{with_wizard_param, wizard_required};
+use helpers::{add_session_id_param, with_wizard_param, wizard_required};
 use serde_json::Value;
 use tracing::debug;
 
@@ -49,42 +49,45 @@ pub use helpers::{WIZARD_ONLY_TOOLS, format_var_for_resource, parse_object_ref};
 /// All tools support an optional `wizard` parameter that executes the tool
 /// with wizard privileges instead of programmer privileges. This should be
 /// used sparingly and only when elevated permissions are required.
+///
+/// Non-wizard-only tools also support an optional `session_id` parameter
+/// that routes the tool call to a specific player session.
 pub fn get_tools() -> Vec<Tool> {
     vec![
         // Execution tools
-        with_wizard_param(eval::tool_moo_eval()),
-        with_wizard_param(eval::tool_moo_command()),
-        with_wizard_param(eval::tool_moo_invoke_verb()),
-        with_wizard_param(eval::tool_moo_function_help()),
-        with_wizard_param(eval::tool_moo_test_compile()),
-        with_wizard_param(eval::tool_moo_parse_command()),
-        with_wizard_param(eval::tool_moo_parse_command_for_player()),
-        with_wizard_param(eval::tool_moo_find_command_verb()),
+        add_session_id_param(with_wizard_param(eval::tool_moo_eval())),
+        add_session_id_param(with_wizard_param(eval::tool_moo_command())),
+        add_session_id_param(with_wizard_param(eval::tool_moo_invoke_verb())),
+        add_session_id_param(with_wizard_param(eval::tool_moo_function_help())),
+        add_session_id_param(with_wizard_param(eval::tool_moo_test_compile())),
+        add_session_id_param(with_wizard_param(eval::tool_moo_parse_command())),
+        add_session_id_param(with_wizard_param(eval::tool_moo_parse_command_for_player())),
+        add_session_id_param(with_wizard_param(eval::tool_moo_find_command_verb())),
         wizard_required(eval::tool_moo_dispatch_command_verb()),
         // Object inspection tools
-        with_wizard_param(objects::tool_moo_list_objects()),
-        with_wizard_param(objects::tool_moo_resolve()),
-        with_wizard_param(objects::tool_moo_object_graph()),
-        with_wizard_param(objects::tool_moo_object_flags()),
+        add_session_id_param(with_wizard_param(objects::tool_moo_list_objects())),
+        add_session_id_param(with_wizard_param(objects::tool_moo_resolve())),
+        add_session_id_param(with_wizard_param(objects::tool_moo_object_graph())),
+        add_session_id_param(with_wizard_param(objects::tool_moo_object_flags())),
         // Verb tools
-        with_wizard_param(verbs::tool_moo_list_verbs()),
-        with_wizard_param(verbs::tool_moo_get_verb()),
-        with_wizard_param(verbs::tool_moo_program_verb()),
-        with_wizard_param(verbs::tool_moo_apply_patch_verb()),
-        with_wizard_param(verbs::tool_moo_add_verb()),
-        with_wizard_param(verbs::tool_moo_delete_verb()),
-        with_wizard_param(verbs::tool_moo_set_verb_info()),
-        with_wizard_param(verbs::tool_moo_set_verb_args()),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_list_verbs())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_get_verb())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_program_verb())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_apply_patch_verb())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_add_verb())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_delete_verb())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_set_verb_info())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_set_verb_args())),
         // Property tools
-        with_wizard_param(properties::tool_moo_list_properties()),
-        with_wizard_param(properties::tool_moo_get_property()),
-        with_wizard_param(properties::tool_moo_set_property()),
-        with_wizard_param(properties::tool_moo_add_property()),
-        with_wizard_param(properties::tool_moo_delete_property()),
+        add_session_id_param(with_wizard_param(properties::tool_moo_list_properties())),
+        add_session_id_param(with_wizard_param(properties::tool_moo_get_property())),
+        add_session_id_param(with_wizard_param(properties::tool_moo_set_property())),
+        add_session_id_param(with_wizard_param(properties::tool_moo_add_property())),
+        add_session_id_param(with_wizard_param(properties::tool_moo_delete_property())),
         // Object manipulation tools
-        with_wizard_param(objects::tool_moo_create_object()),
-        with_wizard_param(objects::tool_moo_recycle_object()),
-        with_wizard_param(objects::tool_moo_set_object_flag()),
+        add_session_id_param(with_wizard_param(objects::tool_moo_create_object())),
+        add_session_id_param(with_wizard_param(objects::tool_moo_recycle_object())),
+        add_session_id_param(with_wizard_param(objects::tool_moo_set_object_flag())),
         // Object definition (objdef) tools - wizard only
         wizard_required(objdef::tool_moo_dump_object()),
         wizard_required(objdef::tool_moo_load_object()),
@@ -96,18 +99,18 @@ pub fn get_tools() -> Vec<Tool> {
         wizard_required(objdef::tool_moo_load_objdef_file()),
         wizard_required(objdef::tool_moo_reload_objdef_file()),
         // Utility tools
-        with_wizard_param(objects::tool_moo_move_object()),
-        with_wizard_param(objects::tool_moo_set_parent()),
+        add_session_id_param(with_wizard_param(objects::tool_moo_move_object())),
+        add_session_id_param(with_wizard_param(objects::tool_moo_set_parent())),
         wizard_required(objdef::tool_moo_diff_object()),
-        with_wizard_param(util::tool_moo_list_prepositions()),
-        with_wizard_param(util::tool_moo_notify()),
-        with_wizard_param(verbs::tool_moo_find_verb_definition()),
+        add_session_id_param(with_wizard_param(util::tool_moo_list_prepositions())),
+        add_session_id_param(with_wizard_param(util::tool_moo_notify())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_find_verb_definition())),
         // Server/session tools
-        with_wizard_param(util::tool_moo_connected_players()),
-        with_wizard_param(util::tool_moo_server_info()),
-        with_wizard_param(util::tool_moo_queued_tasks()),
-        with_wizard_param(util::tool_moo_kill_task()),
-        // Connection management (no wizard param needed - it reconnects both)
+        add_session_id_param(with_wizard_param(util::tool_moo_connected_players())),
+        add_session_id_param(with_wizard_param(util::tool_moo_server_info())),
+        add_session_id_param(with_wizard_param(util::tool_moo_queued_tasks())),
+        add_session_id_param(with_wizard_param(util::tool_moo_kill_task())),
+        // Connection management (no wizard/session params - it reconnects everything)
         util::tool_moo_reconnect(),
     ]
 }

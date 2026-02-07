@@ -113,7 +113,7 @@
         "cargo check passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "This is a mechanical change to tool schema generation and the dispatch layer. Individual tool execute functions don't change — they still receive &mut MoorClient."
     },
     {
