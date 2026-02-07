@@ -49,6 +49,7 @@ mod mcp_types;
 mod moor_client;
 mod prompts;
 mod resources;
+mod session_manager;
 mod tools;
 
 use clap::Parser;
