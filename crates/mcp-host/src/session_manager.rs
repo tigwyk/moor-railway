@@ -23,10 +23,52 @@ use std::time::{Duration, SystemTime};
 
 use eyre::{Result, eyre};
 use moor_var::Obj;
+use serde_derive::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::moor_client::{LoginInfo, LoginMode, MoorClient, MoorClientConfig};
+
+/// Policy for whether agents can create new player accounts
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CreationPolicy {
+    /// Anyone can create accounts
+    Open,
+    /// Creation requires a valid enrollment token
+    Token,
+    /// Only admin/wizard connections can create accounts
+    AdminOnly,
+    /// Account creation is disabled entirely
+    Disabled,
+}
+
+impl std::fmt::Display for CreationPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CreationPolicy::Open => write!(f, "open"),
+            CreationPolicy::Token => write!(f, "token"),
+            CreationPolicy::AdminOnly => write!(f, "admin-only"),
+            CreationPolicy::Disabled => write!(f, "disabled"),
+        }
+    }
+}
+
+impl std::str::FromStr for CreationPolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "open" => Ok(CreationPolicy::Open),
+            "token" => Ok(CreationPolicy::Token),
+            "admin-only" => Ok(CreationPolicy::AdminOnly),
+            "disabled" => Ok(CreationPolicy::Disabled),
+            _ => Err(format!(
+                "invalid creation policy '{s}': expected open, token, admin-only, or disabled"
+            )),
+        }
+    }
+}
 
 /// Status of a player session
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +116,8 @@ pub struct SessionManager {
     sessions: HashMap<Uuid, PlayerSession>,
     max_sessions: usize,
     session_idle_ttl: Duration,
+    creation_policy: CreationPolicy,
+    creation_token: Option<String>,
 }
 
 impl SessionManager {
@@ -84,6 +128,8 @@ impl SessionManager {
         wizard_credentials: Option<ServiceCredentials>,
         max_sessions: usize,
         session_idle_ttl: Duration,
+        creation_policy: CreationPolicy,
+        creation_token: Option<String>,
     ) -> Self {
         Self {
             config,
@@ -94,6 +140,36 @@ impl SessionManager {
             sessions: HashMap::new(),
             max_sessions,
             session_idle_ttl,
+            creation_policy,
+            creation_token,
+        }
+    }
+
+    /// Check whether account creation is allowed under the current policy.
+    ///
+    /// `provided_token` is the token supplied by the caller (if any).
+    /// Returns `Ok(())` if creation is allowed, or an error describing why not.
+    pub fn check_creation_policy(&self, provided_token: Option<&str>) -> Result<()> {
+        match self.creation_policy {
+            CreationPolicy::Open => Ok(()),
+            CreationPolicy::Token => {
+                let expected = self.creation_token.as_deref().ok_or_else(|| {
+                    eyre!("Creation policy is 'token' but no creation token is configured on the server")
+                })?;
+                let provided = provided_token
+                    .ok_or_else(|| eyre!("Creation requires an enrollment token"))?;
+                if provided == expected {
+                    Ok(())
+                } else {
+                    Err(eyre!("Invalid enrollment token"))
+                }
+            }
+            CreationPolicy::AdminOnly => {
+                Err(eyre!("Account creation is restricted to admin connections"))
+            }
+            CreationPolicy::Disabled => {
+                Err(eyre!("Account creation is disabled"))
+            }
         }
     }
 

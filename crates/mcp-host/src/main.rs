@@ -52,6 +52,8 @@ mod resources;
 mod session_manager;
 mod tools;
 
+use std::time::Duration;
+
 use clap::Parser;
 use clap_derive::Parser;
 use connection::{ConnectionConfig, ConnectionManager, Credentials};
@@ -64,6 +66,7 @@ use mcp_server::McpServer;
 use moor_client::MoorClientConfig;
 use rpc_common::client_args::RpcClientArgs;
 use serde_derive::{Deserialize, Serialize};
+use session_manager::CreationPolicy;
 use tracing::{info, warn};
 
 /// mooR MCP Host - AI assistant interface for MOO virtual worlds
@@ -94,6 +97,22 @@ struct Args {
     /// Enable debug logging (logs go to stderr to avoid interfering with MCP)
     #[arg(long, default_value = "false")]
     debug: bool,
+
+    /// Policy for agent account creation: open, token, admin-only, disabled
+    #[arg(long, default_value = "disabled")]
+    creation_policy: String,
+
+    /// Token required for account creation when policy is 'token'
+    #[arg(long)]
+    creation_token: Option<String>,
+
+    /// Maximum number of concurrent player sessions
+    #[arg(long, default_value = "100")]
+    max_sessions: usize,
+
+    /// Idle timeout for player sessions (e.g. '30m', '1h', '300s')
+    #[arg(long, default_value = "30m")]
+    session_idle_ttl: String,
 
     /// YAML config file to use (overrides CLI args)
     #[arg(long)]
@@ -161,6 +180,24 @@ async fn main() -> Result<()> {
         }
         _ => None,
     };
+
+    // Parse session configuration
+    let creation_policy: CreationPolicy = args
+        .creation_policy
+        .parse()
+        .map_err(|e: String| eyre::eyre!(e))?;
+    let _session_idle_ttl: Duration = humantime::parse_duration(&args.session_idle_ttl)
+        .map_err(|e| eyre::eyre!("Invalid session-idle-ttl '{}': {}", args.session_idle_ttl, e))?;
+
+    if creation_policy == CreationPolicy::Token && args.creation_token.is_none() {
+        return Err(eyre::eyre!(
+            "Creation policy is 'token' but --creation-token was not provided"
+        ));
+    }
+
+    info!("Creation policy: {creation_policy}");
+    info!("Max sessions: {}", args.max_sessions);
+    info!("Session idle TTL: {}", args.session_idle_ttl);
 
     // Create the connection manager
     let connection_config = ConnectionConfig {
