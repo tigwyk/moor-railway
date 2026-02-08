@@ -1,39 +1,120 @@
-[build]
+# mooR Multi-Service Railway Configuration
+# https://docs.railway.com/deployments/monorepo
+
+# Daemon Service - Core MOO database and RPC server
+[daemon.build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.railway"
 buildTimeout = 1800
 
-[deploy]
-startCommand = ""
+[daemon.deploy]
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ALWAYS"
 
-# Daemon needs persistent volume for database
-[[services.volumes]]
+[[daemon.deploy.volumes]]
 type = "persistent"
 name = "data"
 mountPath = "/data"
 
-# Expose RPC and events ports for other services to connect
-[[services.ports]]
+[[daemon.deploy.ports]]
 port = 7899
 type = "TCP"
 
-[[services.ports]]
+[[daemon.deploy.ports]]
 port = 7898
 type = "TCP"
 
-[[services.ports]]
+[[daemon.deploy.ports]]
+port = 7897
+type = "TCP"
+
+[[daemon.deploy.ports]]
+port = 7896
+type = "TCP"
+
+[[daemon.deploy.ports]]
 port = 7900
 type = "TCP"
 
-[env]
+[daemon.env]
 BUILD_PROFILE = "release-fast"
-RUN_DIR = "run-cowbell"
 IMPORT_PATH = "/data/cores/cowbell/src"
 USE_BOOLEAN_RETURNS = "true"
 CUSTOM_ERRORS = "true"
 USE_UUOBJIDS = "true"
 ANONYMOUS_OBJECTS = "true"
 ENABLE_EVENTLOG = "true"
+
+# Telnet Host Service
+[telnet.build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.telnet"
+buildTimeout = 1800
+
+[telnet.deploy]
+restartPolicyType = "ALWAYS"
+
+[[telnet.deploy.volumes]]
+type = "persistent"
+name = "telnet-data"
+mountPath = "/data"
+
+[[telnet.deploy.ports]]
+port = 8888
+type = "TCP"
+
+[telnet.env]
+BUILD_PROFILE = "release-fast"
+
+# Web Host Service
+[webhost.build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.web-host.railway"
+buildTimeout = 1800
+
+[webhost.deploy]
+restartPolicyType = "ALWAYS"
+
+[[webhost.deploy.volumes]]
+type = "persistent"
+name = "web-data"
+mountPath = "/data"
+
+[[webhost.deploy.ports]]
+port = 8081
+type = "TCP"
+
+[webhost.env]
+BUILD_PROFILE = "release-fast"
+
+# Worker Service
+[worker.build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.worker.railway"
+buildTimeout = 1800
+
+[worker.deploy]
+restartPolicyType = "ALWAYS"
+
+[[worker.deploy.volumes]]
+type = "persistent"
+name = "worker-data"
+mountPath = "/data"
+
+[worker.env]
+BUILD_PROFILE = "release-fast"
+
+# Frontend Service
+[frontend.build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.frontend.railway"
+buildTimeout = 1800
+
+[frontend.deploy]
+restartPolicyType = "ALWAYS"
+healthcheckPath = "/"
+
+[[frontend.deploy.ports]]
+port = 80
+type = "HTTP"
