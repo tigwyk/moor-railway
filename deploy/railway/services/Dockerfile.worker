@@ -1,0 +1,28 @@
+# mooR Curl Worker - Railway Service
+FROM rust:1.92-bookworm AS builder
+
+WORKDIR /moor
+RUN apt update && apt -y install clang-16 libclang-16-dev cmake libsodium-dev pkg-config git curl
+
+COPY crates ./crates
+COPY tools ./tools
+COPY Cargo.toml Cargo.lock ./
+
+ARG BUILD_PROFILE=release-fast
+RUN cargo build --profile $BUILD_PROFILE --bin moor-curl-worker && \
+    cp target/$BUILD_PROFILE/moor-curl-worker /usr/local/bin/
+
+FROM debian:bookworm-slim
+RUN apt update && apt -y install libssl3 libsodium23 ca-certificates curl && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /data
+
+COPY --from=builder /usr/local/bin/moor-curl-worker /usr/local/bin/
+
+ENV RUST_BACKTRACE=1
+ENV HOME=/data
+
+CMD ["moor-curl-worker", \
+     "--rpc-address=tcp://moor-daemon:7899", \
+     "--events-address=tcp://moor-daemon:7898", \
+     "--data-dir=/data/worker-data"]

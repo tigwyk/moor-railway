@@ -1,0 +1,37 @@
+# mooR Daemon - Railway Service
+FROM rust:1.92-bookworm AS builder
+
+WORKDIR /moor
+RUN apt update && apt -y install clang-16 libclang-16-dev cmake libsodium-dev pkg-config git
+
+COPY crates ./crates
+COPY tools ./tools
+COPY Cargo.toml Cargo.lock ./
+
+ARG BUILD_PROFILE=release-fast
+RUN cargo build --profile $BUILD_PROFILE --bin moor-daemon && \
+    cp target/$BUILD_PROFILE/moor-daemon /usr/local/bin/
+
+FROM debian:bookworm-slim
+RUN apt update && apt -y install libssl3 libsodium23 ca-certificates git && rm -rf /var/lib/apt/lists/*
+
+# Create data directory
+RUN mkdir -p /data
+
+COPY --from=builder /usr/local/bin/moor-daemon /usr/local/bin/
+
+# Expose RPC and events ports
+EXPOSE 7899 7898
+
+ENV RUST_BACKTRACE=1
+ENV HOME=/data
+ENV IMPORT_PATH=/data/cores/cowbell/src
+
+CMD ["moor-daemon", \
+     "/data/moor-data", \
+     "--db=production.db", \
+     "--rpc-listen=tcp://0.0.0.0:7899", \
+     "--events-listen=tcp://0.0.0.0:7898", \
+     "--generate-keypair", \
+     "--public-key=/data/moor.key.pub", \
+     "--private-key=/data/moor.key.pem"]

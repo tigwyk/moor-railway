@@ -1,42 +1,123 @@
-[build]
+# mooR Multi-Service Railway Configuration
+# Each service is built and deployed independently
+
+# Shared environment variables
+[env]
+BUILD_PROFILE = "release-fast"
+USE_BOOLEAN_RETURNS = "true"
+CUSTOM_ERRORS = "true"
+USE_UUOBJIDS = "true"
+ANONYMOUS_OBJECTS = "true"
+ANONYMOUS_OBJECTS = "true"
+ENABLE_EVENTLOG = "true"
+
+# Daemon Service - Core MOO database and RPC server
+[[services]]
+name = "moor-daemon"
+
+[services.build]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile.railway"
+dockerfilePath = "deploy/railway/services/Dockerfile.daemon"
 buildTimeout = 1800
 
-[deploy]
-startCommand = ""
+[services.deploy]
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ALWAYS"
+numReplicas = 1
 
-# Persistent volume for database and core
 [[services.volumes]]
 type = "persistent"
 name = "data"
 mountPath = "/data"
 
-# Exposed ports
 [[services.ports]]
-port = 8080
-type = "HTTP"
+port = 7899
+type = "TCP"
+
+[[services.ports]]
+port = 7898
+type = "TCP"
+
+# Web Host Service - HTTP/WebSocket API
+[[services]]
+name = "moor-web-host"
+
+[services.build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/railway/services/Dockerfile.web-host"
+buildTimeout = 1800
+
+[services.deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ALWAYS"
+numReplicas = 1
+
+[[services.volumes]]
+type = "persistent"
+name = "web-data"
+mountPath = "/data"
 
 [[services.ports]]
 port = 8081
-type = "TCP"
+type = "HTTP"
+
+# Telnet Host Service - Classic telnet interface
+[[services]]
+name = "moor-telnet-host"
+
+[services.build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/railway/services/Dockerfile.telnet"
+buildTimeout = 1800
+
+[services.deploy]
+restartPolicyType = "ALWAYS"
+numReplicas = 1
+
+[[services.volumes]]
+type = "persistent"
+name = "telnet-data"
+mountPath = "/data"
 
 [[services.ports]]
 port = 8888
 type = "TCP"
 
-[env]
-PORT = "8080"
-RUN_DIR = "run-cowbell"
-BUILD_PROFILE = "release-fast"
-IMPORT_PATH = "/data/cores/cowbell/src"
-USE_BOOLEAN_RETURNS = "true"
-CUSTOM_ERRORS = "true"
-USE_UUOBJIDS = "true"
-ANONYMOUS_OBJECTS = "true"
-ENABLE_EVENTLOG = "true"
-MCP_CREATION_POLICY = "open"
-# Force rebuild Sat Feb  7 21:40:56 PST 2026
+# Worker Service - Background task processing
+[[services]]
+name = "moor-worker"
+
+[services.build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/railway/services/Dockerfile.worker"
+buildTimeout = 1800
+
+[services.deploy]
+restartPolicyType = "ALWAYS"
+numReplicas = 1
+
+[[services.volumes]]
+type = "persistent"
+name = "worker-data"
+mountPath = "/data"
+
+# Frontend Service - Meadow web UI
+[[services]]
+name = "moor-frontend"
+
+[services.build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/railway/services/Dockerfile.frontend"
+buildTimeout = 1800
+
+[services.deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "ALWAYS"
+numReplicas = 1
+
+[[services.ports]]
+port = 80
+type = "HTTP"
