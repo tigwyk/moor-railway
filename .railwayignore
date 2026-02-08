@@ -22,7 +22,7 @@ clients/web-sdk/node_modules/
 crates/
 tools/
 book/
-doc/
+doc/*
 !doc/skill.md
 cores/
 
