@@ -17,8 +17,8 @@ COPY ./.git ./.git
 
 # Build release binaries
 ARG BUILD_PROFILE=release-fast
-RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=cargo-build,target=/moor-build/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/moor-build/target \
     cargo build --profile $BUILD_PROFILE --jobs 6 && \
     cp -r target/$BUILD_PROFILE /moor-build/target-final
 
