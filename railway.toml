@@ -127,6 +127,10 @@ dockerfilePath = "Dockerfile.mcp-gateway"
 restartPolicyType = "ALWAYS"
 numReplicas = 1
 
+[[mcp-gateway.ports]]
+port = 8090
+type = "TCP"
+
 [[mcp-gateway.volumes]]
 type = "persistent"
 name = "mcp-gateway-data"
