@@ -70,4 +70,7 @@ export USE_UUOBJIDS=true
 export ANONYMOUS_OBJECTS=true
 export ENABLE_EVENTLOG=true
 
+# MCP host configuration - allow open account creation for agents
+export MCP_CREATION_POLICY=open
+
 docker compose up --build

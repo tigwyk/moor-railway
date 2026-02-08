@@ -58,6 +58,7 @@ tracing-subscriber.workspace = true
 
 # Utilities & Helpers
 diffy.workspace = true
+humantime.workspace = true
 uuid.workspace = true
 
 [[bin]]

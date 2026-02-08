@@ -67,4 +67,11 @@ clients/moor-web-mcp/*.local.json
 # Proptest failure snapshots (regenerated on failure)
 proptest-failures/
 .mcp.json
-.mcp.json
+
+# Local runtime data directories
+moor-data/
+config/
+local-share/
+
+# Railway CLI local data
+.railway/

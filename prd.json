@@ -1,0 +1,190 @@
+{
+  "project": "moor-mcp-host",
+  "branchName": "ralph/mcp-multi-session",
+  "description": "Multi-session support for moor-mcp-host: SessionManager, player creation, session lifecycle tools, session-aware dispatch, and narrative event delivery",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add LoginMode::Create to MoorClient",
+      "description": "As a developer, I need MoorClient to support both 'connect' and 'create' login verbs so that new player accounts can be created through the RPC layer.",
+      "acceptanceCriteria": [
+        "Add LoginMode enum with Connect and Create variants to moor_client.rs",
+        "Add LoginInfo struct with fields: player (Obj), connect_type (string), player_flags (u32)",
+        "Add login_with_mode(mode, username, password) -> Result<LoginInfo> method to MoorClient",
+        "LoginMode::Create sends ['create', username, password] as connect_args to mk_login_command_msg",
+        "LoginMode::Connect sends ['connect', username, password] (current behavior)",
+        "Existing login() method delegates to login_with_mode(Connect, ...) for backward compat",
+        "Stored credentials include the login mode for reconnection in reconnect()",
+        "cargo check passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "This is a targeted change to moor_client.rs only. The daemon already handles 'create' in perform_login() via args[0] == 'create'."
+    },
+    {
+      "id": "US-002",
+      "title": "Create PlayerSession and SessionManager structs",
+      "description": "As a developer, I need a SessionManager that can hold N dynamic player sessions so that multiple agents can connect through one server.",
+      "acceptanceCriteria": [
+        "Create new file session_manager.rs with PlayerSession and SessionManager structs",
+        "PlayerSession contains: id (Uuid), username (String), player (Obj), created_at (SystemTime), last_used_at (Mutex<SystemTime>), client (Mutex<MoorClient>), status enum (Active/Errored/Expired)",
+        "SessionManager contains: config (MoorClientConfig), programmer_service (Option<Mutex<MoorClient>>), wizard_service (Option<Mutex<MoorClient>>), sessions (RwLock<HashMap<Uuid, Arc<PlayerSession>>>), max_sessions (usize), session_idle_ttl (Duration)",
+        "SessionManager::new() accepts config, optional programmer/wizard credentials, max_sessions, session_idle_ttl",
+        "Add create_session(login_mode, username, password) -> Result<(Uuid, LoginInfo)> that creates a MoorClient, connects, logs in, and stores the session",
+        "Add get_session(id) -> Option<Arc<PlayerSession>> that validates session exists and is active",
+        "Add close_session(id) -> Result<()> that disconnects and removes the session",
+        "Add list_sessions() -> Vec of session info (id, username, player, status, last_used_at)",
+        "Add cleanup_expired_sessions() that removes sessions idle longer than session_idle_ttl",
+        "Enforce max_sessions limit in create_session, returning error when exceeded",
+        "Add mod session_manager to main.rs",
+        "cargo check passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "This is a new file. Does not replace ConnectionManager yet — that happens in the integration story."
+    },
+    {
+      "id": "US-003",
+      "title": "Add creation policy configuration",
+      "description": "As a server operator, I want to control whether agents can self-register via CLI args so that I can enforce security policies.",
+      "acceptanceCriteria": [
+        "Add CreationPolicy enum: Open, Token, AdminOnly, Disabled to session_manager.rs",
+        "Add --creation-policy CLI arg with values: open, token, admin-only, disabled (default: disabled)",
+        "Add --creation-token CLI arg (string, required when policy is 'token')",
+        "Add --max-sessions CLI arg (usize, default: 100)",
+        "Add --session-idle-ttl CLI arg (string like '30m', default: '30m')",
+        "All new args also configurable via YAML config file",
+        "Add check_creation_policy(policy, provided_token) -> Result<()> method to SessionManager that returns error when creation is not allowed",
+        "cargo check passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Policy enforcement is just validation logic here. It gets wired into the MCP tools in a later story."
+    },
+    {
+      "id": "US-004",
+      "title": "Integrate SessionManager into McpServer replacing ConnectionManager",
+      "description": "As a developer, I need McpServer to use SessionManager instead of ConnectionManager so that session-aware dispatch is possible.",
+      "acceptanceCriteria": [
+        "McpServer stores SessionManager instead of ConnectionManager",
+        "McpServer tracks current_session_id: Option<Uuid>",
+        "Update main.rs to construct SessionManager with programmer/wizard credentials from existing CLI args plus new session config args",
+        "Add get_client_for_tool(wizard, session_id_param) method to McpServer that resolves: wizard-only -> wizard_service, explicit session_id -> that session, current_session_id -> that session, fallback -> programmer_service",
+        "Update handle_tools_call to use get_client_for_tool instead of connections.get(wizard)",
+        "Update handle_reconnect to reconnect service clients and all active sessions",
+        "Update disconnect_all on shutdown to close all sessions",
+        "Existing tools continue to work via programmer_service fallback when no sessions exist",
+        "cargo check passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "This is the main integration story. After this, the old connection.rs is no longer used. Dynamic tool and resource fetching should use programmer_service or wizard_service."
+    },
+    {
+      "id": "US-005",
+      "title": "Add session lifecycle MCP tools",
+      "description": "As an AI agent, I want MCP tools to create, login, select, list, and close sessions so I can manage my identity.",
+      "acceptanceCriteria": [
+        "Add moo_session_create tool: args {username, password, enrollment_token?, set_current?: true} -> {session_id, player, connect_type}",
+        "moo_session_create enforces creation policy (calls check_creation_policy)",
+        "Add moo_session_login tool: args {username, password, set_current?: true} -> {session_id, player, connect_type}",
+        "Add moo_session_use tool: args {session_id} -> sets current_session_id",
+        "Add moo_session_close tool: args {session_id?} -> disconnects and removes session (defaults to current)",
+        "Add moo_sessions_list tool: no args -> returns list of {session_id, username, player, status, last_used_at}",
+        "All five tools registered in get_tools() and dispatched in execute_tool()",
+        "All tools return clear error messages for: max sessions reached, invalid session_id, creation disabled, bad token",
+        "cargo check passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "These are meta-tools handled in mcp_server.rs similar to moo_reconnect and moo_refresh_dynamic_tools. They don't go through the normal client dispatch."
+    },
+    {
+      "id": "US-006",
+      "title": "Add optional session_id parameter to all non-wizard tools",
+      "description": "As an agent with a session, I want to pass session_id to any tool so it executes as my player.",
+      "acceptanceCriteria": [
+        "Add session_id (optional string) to the input_schema of every tool created via with_wizard_param() in get_tools()",
+        "Create a helper function add_session_id_param(tool: Tool) -> Tool that adds the session_id property to a tool's input_schema",
+        "Apply add_session_id_param to all non-wizard-only tools in get_tools()",
+        "The session_id parameter is extracted in handle_tools_call and passed to get_client_for_tool for dispatch",
+        "Wizard-only tools (created via wizard_required()) do NOT get session_id param",
+        "Tool descriptions mention session_id is optional and defaults to current session",
+        "cargo check passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "This is a mechanical change to tool schema generation and the dispatch layer. Individual tool execute functions don't change — they still receive &mut MoorClient."
+    },
+    {
+      "id": "US-007",
+      "title": "Add narrative event subscription to PlayerSession",
+      "description": "As a developer, I need each PlayerSession to subscribe to narrative events from the daemon so agents can perceive the world.",
+      "acceptanceCriteria": [
+        "PlayerSession starts a background tokio task that subscribes to the player's narrative event stream",
+        "Events are parsed using existing extract_narrative_text / narrative_event_from_ref utilities",
+        "Events are stored in a bounded buffer (VecDeque with max 1000 entries, oldest dropped when full)",
+        "Each buffered event contains: event_type (notify/traceback/present/unpresent), content (String), timestamp (SystemTime)",
+        "Buffer is wrapped in Mutex for safe concurrent access",
+        "Event subscription task starts after successful login in create_session",
+        "Event subscription task stops when session is closed (via kill switch AtomicBool)",
+        "Add drain_events() method to PlayerSession that returns and clears buffered events",
+        "cargo check passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Modeled after the existing ping responder pattern in MoorClient — background task with kill switch. Uses the ZMQ events subscriber."
+    },
+    {
+      "id": "US-008",
+      "title": "Add moo_session_events polling tool",
+      "description": "As an AI agent, I want to poll for narrative events so I can perceive what's happening in the MOO world.",
+      "acceptanceCriteria": [
+        "Add moo_session_events tool: args {session_id?, timeout_ms?: 5000}",
+        "Returns list of {type, content, timestamp} events from the session's buffer",
+        "timeout_ms: 0 returns immediately with whatever is buffered",
+        "timeout_ms > 0 waits up to that duration for at least one event if buffer is empty",
+        "After returning, the returned events are cleared from the buffer",
+        "Returns error if session_id is invalid or no current session is set",
+        "Tool registered in get_tools() and dispatched in mcp_server.rs",
+        "cargo check passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "This is a meta-tool like the session lifecycle tools — it needs direct access to the SessionManager, not just a MoorClient."
+    },
+    {
+      "id": "US-009",
+      "title": "Session reconnect support",
+      "description": "As a server operator, I want all sessions to recover from daemon restarts so agents don't lose their state.",
+      "acceptanceCriteria": [
+        "SessionManager::reconnect_all() reconnects programmer_service, wizard_service, AND all active player sessions",
+        "Per-session reconnect uses stored credentials and original LoginMode",
+        "Sessions that fail reconnection have status set to Errored (not removed)",
+        "moo_sessions_list shows session status: Active, Errored, Expired",
+        "moo_reconnect tool result message lists: service clients reconnected, sessions succeeded, sessions failed",
+        "Errored sessions can be retried via a subsequent moo_reconnect call",
+        "cargo check passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Extends the existing moo_reconnect meta-tool. Uses MoorClient::reconnect_with_backoff() which already exists."
+    },
+    {
+      "id": "US-010",
+      "title": "Remove old ConnectionManager and clean up",
+      "description": "As a developer, I want to remove dead code and ensure the refactored crate is clean.",
+      "acceptanceCriteria": [
+        "connection.rs is deleted (ConnectionManager fully replaced by SessionManager)",
+        "All references to ConnectionManager removed from main.rs, mcp_server.rs, and mod declarations",
+        "No dead code warnings related to the old connection module",
+        "cargo check passes",
+        "cargo test passes (if any tests exist in the crate)",
+        "cargo clippy passes with no new warnings"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Final cleanup story. Should be trivial if US-004 was done correctly."
+    }
+  ]
+}

@@ -16,9 +16,10 @@
 //! This module implements the Model Context Protocol server that communicates
 //! over stdio using JSON-RPC 2.0.
 
-use crate::connection::ConnectionManager;
 use crate::mcp_types::*;
-use crate::moor_client::MoorClient;
+use crate::moor_client::{LoginMode, MoorClient};
+use crate::session_manager::{NarrativeEventType, SessionManager, SessionStatus};
+use std::time::SystemTime;
 use crate::tools::dynamic::{
     DynamicResource, DynamicTool, execute_dynamic_tool, fetch_dynamic_resources,
     fetch_dynamic_tools,
@@ -28,13 +29,16 @@ use eyre::Result;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 /// MCP protocol version we support
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// MCP Server state
 pub struct McpServer {
-    connections: ConnectionManager,
+    sessions: SessionManager,
+    /// Currently selected player session (if any)
+    current_session_id: Option<Uuid>,
     initialized: bool,
     shutdown_requested: bool,
     /// Dynamically-defined tools fetched from the MOO world
@@ -48,10 +52,11 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Create a new MCP server with a connection manager
-    pub fn new(connections: ConnectionManager) -> Self {
+    /// Create a new MCP server with a session manager
+    pub fn new(sessions: SessionManager) -> Self {
         Self {
-            connections,
+            sessions,
+            current_session_id: None,
             initialized: false,
             shutdown_requested: false,
             dynamic_tools: Vec::new(),
@@ -61,14 +66,64 @@ impl McpServer {
         }
     }
 
+    /// Resolve the appropriate MoorClient for a tool call.
+    ///
+    /// Resolution order:
+    /// 1. `wizard` is true -> wizard service client (error in session-only mode)
+    /// 2. `session_id_param` is Some -> that session's client
+    /// 3. `self.current_session_id` is Some -> current session's client
+    /// 4. Fallback -> programmer service client (error in session-only mode)
+    async fn get_client_for_tool(
+        &mut self,
+        wizard: bool,
+        session_id_param: Option<&Uuid>,
+    ) -> Result<&mut MoorClient, String> {
+        // In session-only mode, wizard mode is not available
+        if wizard {
+            if self.sessions.session_only {
+                return Err("Wizard mode is not available in session-only mode".to_string());
+            }
+            return self
+                .sessions
+                .wizard_service_mut()
+                .await
+                .map_err(|e| e.to_string());
+        }
+
+        if let Some(sid) = session_id_param.or(self.current_session_id.as_ref()) {
+            let sid = *sid;
+            return self
+                .sessions
+                .get_session_client_mut(&sid)
+                .map_err(|e| e.to_string());
+        }
+
+        // In session-only mode, require an active session
+        if self.sessions.session_only {
+            return Err(
+                "No active session. Use moo_session_login or moo_session_create first.".to_string()
+            );
+        }
+
+        self.sessions
+            .programmer_service_mut()
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// Refresh dynamic tools from the MOO world
     ///
     /// Calls #0:external_agent_tools() and updates the stored tool list.
+    /// In session-only mode, dynamic tools are not available.
     async fn refresh_dynamic_tools(&mut self) -> Result<usize, String> {
-        // Use programmer connection for fetching tools
+        if self.sessions.session_only {
+            self.dynamic_tools_loaded = true;
+            return Err("Dynamic tools are not available in session-only mode".to_string());
+        }
+
         let client = self
-            .connections
-            .programmer()
+            .sessions
+            .programmer_service_mut()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -91,10 +146,16 @@ impl McpServer {
     /// Refresh dynamic resources from the MOO world
     ///
     /// Calls #0:external_agent_resources() and updates the stored resource list.
+    /// In session-only mode, dynamic resources are not available.
     async fn refresh_dynamic_resources(&mut self) -> Result<usize, String> {
+        if self.sessions.session_only {
+            self.dynamic_resources_loaded = true;
+            return Err("Dynamic resources are not available in session-only mode".to_string());
+        }
+
         let client = self
-            .connections
-            .programmer()
+            .sessions
+            .programmer_service_mut()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -178,7 +239,7 @@ impl McpServer {
         }
 
         // Gracefully disconnect from daemon
-        self.connections.disconnect_all().await;
+        self.sessions.disconnect_all().await;
 
         Ok(())
     }
@@ -260,10 +321,10 @@ impl McpServer {
         info!("Initializing MCP server");
 
         // Log configured connections (connections are established lazily on first use)
-        if self.connections.has_programmer_credentials() {
+        if self.sessions.has_programmer_credentials() {
             info!("Programmer connection configured (will connect on first use)");
         }
-        if self.connections.has_wizard_credentials() {
+        if self.sessions.has_wizard_credentials() {
             info!("Wizard connection configured (will connect on first use)");
         }
 
@@ -292,28 +353,151 @@ impl McpServer {
 
     /// Handle tools/list request
     async fn handle_tools_list(&mut self) -> Result<Value, JsonRpcError> {
-        // Fetch dynamic tools on first access if not already loaded
-        if !self.dynamic_tools_loaded {
+        // Fetch dynamic tools on first access if not already loaded (skip in session-only mode)
+        if !self.sessions.session_only && !self.dynamic_tools_loaded {
             let _ = self.refresh_dynamic_tools().await;
         }
 
-        // Merge static tools with dynamic tools
+        // Always show static tools (they require authentication in session-only mode)
         let mut all_tools = tools::get_tools();
 
-        // Add dynamic tools
-        for dynamic_tool in &self.dynamic_tools {
-            all_tools.push(dynamic_tool.to_mcp_tool());
+        // Add dynamic tools (only in non-session-only mode)
+        if !self.sessions.session_only {
+            for dynamic_tool in &self.dynamic_tools {
+                all_tools.push(dynamic_tool.to_mcp_tool());
+            }
+
+            // Add the refresh_dynamic_tools meta-tool
+            all_tools.push(Tool {
+                name: "moo_refresh_dynamic_tools".to_string(),
+                description: "Refresh the list of dynamic tools from the MOO world. \
+                    Call this after tools have been added or modified in #0:external_agent_tools()."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            });
         }
 
-        // Add the refresh_dynamic_tools meta-tool
+        // Session lifecycle meta-tools
         all_tools.push(Tool {
-            name: "moo_refresh_dynamic_tools".to_string(),
-            description: "Refresh the list of dynamic tools from the MOO world. \
-                Call this after tools have been added or modified in #0:external_agent_tools()."
+            name: "moo_session_create".to_string(),
+            description: "Create a new player account and session. Requires account creation \
+                to be enabled via the server's creation policy."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "username": {
+                        "type": "string",
+                        "description": "Username for the new player account"
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "Password for the new player account"
+                    },
+                    "enrollment_token": {
+                        "type": "string",
+                        "description": "Enrollment token (required when creation policy is 'token')"
+                    },
+                    "set_current": {
+                        "type": "boolean",
+                        "description": "Set this session as the current session (default: true)",
+                        "default": true
+                    }
+                },
+                "required": ["username", "password"]
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_session_login".to_string(),
+            description: "Log in to an existing player account, creating a new session."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "username": {
+                        "type": "string",
+                        "description": "Username of the existing player account"
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "Password for the player account"
+                    },
+                    "set_current": {
+                        "type": "boolean",
+                        "description": "Set this session as the current session (default: true)",
+                        "default": true
+                    }
+                },
+                "required": ["username", "password"]
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_session_use".to_string(),
+            description: "Set the current active session. Subsequent tool calls will use this \
+                session's player identity unless overridden with session_id."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to make current"
+                    }
+                },
+                "required": ["session_id"]
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_session_close".to_string(),
+            description: "Close and disconnect a session. Defaults to the current session if \
+                no session_id is provided."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to close (defaults to current session)"
+                    }
+                }
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_sessions_list".to_string(),
+            description: "List all active player sessions with their status."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {}
+            }),
+        });
+
+        all_tools.push(Tool {
+            name: "moo_session_events".to_string(),
+            description: "Poll for narrative events from the MOO world for a session. \
+                Returns buffered events and clears them. Use timeout_ms to wait for events \
+                if the buffer is empty."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to poll events for (defaults to current session)"
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Maximum time to wait for events in milliseconds. 0 returns immediately with whatever is buffered (default: 5000)",
+                        "default": 5000
+                    }
+                }
             }),
         });
 
@@ -335,6 +519,24 @@ impl McpServer {
         if call_params.name == "moo_reconnect" {
             return self.handle_reconnect().await;
         }
+        if call_params.name == "moo_session_create" {
+            return self.handle_session_create(&call_params.arguments).await;
+        }
+        if call_params.name == "moo_session_login" {
+            return self.handle_session_login(&call_params.arguments).await;
+        }
+        if call_params.name == "moo_session_use" {
+            return self.handle_session_use(&call_params.arguments).await;
+        }
+        if call_params.name == "moo_session_close" {
+            return self.handle_session_close(&call_params.arguments).await;
+        }
+        if call_params.name == "moo_sessions_list" {
+            return self.handle_sessions_list().await;
+        }
+        if call_params.name == "moo_session_events" {
+            return self.handle_session_events(&call_params.arguments).await;
+        }
 
         // Determine if wizard privileges are needed
         let dynamic_tool = self.find_dynamic_tool(&call_params.name).cloned();
@@ -354,8 +556,15 @@ impl McpServer {
             );
         }
 
+        // Extract optional session_id from tool arguments
+        let session_id = call_params
+            .arguments
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
+
         // Execute the tool with automatic reconnection on connection failures
-        self.execute_tool_with_reconnect(&call_params, dynamic_tool.as_ref(), wizard)
+        self.execute_tool_with_reconnect(&call_params, dynamic_tool.as_ref(), wizard, session_id.as_ref())
             .await
     }
 
@@ -373,13 +582,265 @@ impl McpServer {
 
     /// Handle the reconnect meta-tool
     ///
-    /// Reconnects all established connections (both programmer and wizard).
+    /// Reconnects all service connections and active player sessions.
     async fn handle_reconnect(&mut self) -> Result<Value, JsonRpcError> {
-        info!("Manual reconnect requested for all connections");
-        let result = match self.connections.reconnect_all().await {
+        info!("Manual reconnect requested for all connections and sessions");
+        let result = match self.sessions.reconnect_all().await {
             Ok(msg) => ToolCallResult::text(msg),
             Err(e) => ToolCallResult::error(format!("Reconnect failed: {}", e)),
         };
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_create meta-tool
+    async fn handle_session_create(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let username = arguments
+            .get("username")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: username"))?;
+        let password = arguments
+            .get("password")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: password"))?;
+        let enrollment_token = arguments
+            .get("enrollment_token")
+            .and_then(|v| v.as_str());
+        let set_current = arguments
+            .get("set_current")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        self.sessions
+            .check_creation_policy(enrollment_token)
+            .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+
+        let (session_id, login_info) = self
+            .sessions
+            .create_session(LoginMode::Create, username, password)
+            .await
+            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+
+        if set_current {
+            self.current_session_id = Some(session_id);
+        }
+
+        let result = ToolCallResult::text(format!(
+            "Session created.\n  session_id: {session_id}\n  player: {}\n  connect_type: {}",
+            login_info.player, login_info.connect_type
+        ));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_login meta-tool
+    async fn handle_session_login(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let username = arguments
+            .get("username")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: username"))?;
+        let password = arguments
+            .get("password")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: password"))?;
+        let set_current = arguments
+            .get("set_current")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let (session_id, login_info) = self
+            .sessions
+            .create_session(LoginMode::Connect, username, password)
+            .await
+            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+
+        if set_current {
+            self.current_session_id = Some(session_id);
+        }
+
+        let result = ToolCallResult::text(format!(
+            "Session created.\n  session_id: {session_id}\n  player: {}\n  connect_type: {}",
+            login_info.player, login_info.connect_type
+        ));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_use meta-tool
+    async fn handle_session_use(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let session_id_str = arguments
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing required parameter: session_id"))?;
+        let session_id = Uuid::parse_str(session_id_str)
+            .map_err(|e| JsonRpcError::invalid_params(format!("Invalid session_id: {e}")))?;
+
+        // Verify the session exists and is active
+        if self.sessions.get_session(&session_id).is_none() {
+            return Ok(serde_json::to_value(ToolCallResult::error(format!(
+                "Session {session_id} not found or not active"
+            )))
+            .unwrap());
+        }
+
+        self.current_session_id = Some(session_id);
+        let result = ToolCallResult::text(format!("Current session set to {session_id}"));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_close meta-tool
+    async fn handle_session_close(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let session_id = if let Some(id_str) = arguments.get("session_id").and_then(|v| v.as_str())
+        {
+            Uuid::parse_str(id_str)
+                .map_err(|e| JsonRpcError::invalid_params(format!("Invalid session_id: {e}")))?
+        } else if let Some(current) = self.current_session_id {
+            current
+        } else {
+            return Ok(
+                serde_json::to_value(ToolCallResult::error("No session_id provided and no current session is set")).unwrap(),
+            );
+        };
+
+        self.sessions
+            .close_session(&session_id)
+            .await
+            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+
+        if self.current_session_id == Some(session_id) {
+            self.current_session_id = None;
+        }
+
+        let result = ToolCallResult::text(format!("Session {session_id} closed"));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_sessions_list meta-tool
+    async fn handle_sessions_list(&self) -> Result<Value, JsonRpcError> {
+        let sessions = self.sessions.list_sessions();
+        if sessions.is_empty() {
+            return Ok(serde_json::to_value(ToolCallResult::text("No active sessions")).unwrap());
+        }
+
+        let mut lines = Vec::with_capacity(sessions.len() + 1);
+        lines.push(format!("Sessions ({}):", sessions.len()));
+        for s in &sessions {
+            let status = match s.status {
+                SessionStatus::Active => "active",
+                SessionStatus::Errored => "errored",
+                SessionStatus::Expired => "expired",
+            };
+            let current = if self.current_session_id == Some(s.id) {
+                " (current)"
+            } else {
+                ""
+            };
+            let age = s
+                .last_used_at
+                .elapsed()
+                .map(|d| format!("{}s ago", d.as_secs()))
+                .unwrap_or_else(|_| "unknown".to_string());
+            lines.push(format!(
+                "  {}{current}  user={} player={} status={status} last_used={age}",
+                s.id, s.username, s.player
+            ));
+        }
+
+        let result = ToolCallResult::text(lines.join("\n"));
+        Ok(serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle moo_session_events meta-tool
+    async fn handle_session_events(
+        &mut self,
+        arguments: &Value,
+    ) -> Result<Value, JsonRpcError> {
+        let session_id = if let Some(id_str) = arguments.get("session_id").and_then(|v| v.as_str())
+        {
+            Uuid::parse_str(id_str)
+                .map_err(|e| JsonRpcError::invalid_params(format!("Invalid session_id: {e}")))?
+        } else if let Some(current) = self.current_session_id {
+            current
+        } else {
+            return Ok(
+                serde_json::to_value(ToolCallResult::error(
+                    "No session_id provided and no current session is set",
+                ))
+                .unwrap(),
+            );
+        };
+
+        let timeout_ms = arguments
+            .get("timeout_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5000);
+
+        // Get the session and clone its event buffer Arc for async polling
+        let buffer_arc = {
+            let session = self.sessions.get_session(&session_id).ok_or_else(|| {
+                JsonRpcError::invalid_params(format!(
+                    "Session {session_id} not found or not active"
+                ))
+            })?;
+            session.event_buffer_arc()
+        };
+
+        // If timeout > 0 and buffer is empty, poll until events arrive or timeout
+        if timeout_ms > 0 {
+            let deadline = tokio::time::Instant::now()
+                + tokio::time::Duration::from_millis(timeout_ms);
+            let poll_interval = tokio::time::Duration::from_millis(50);
+
+            while tokio::time::Instant::now() < deadline {
+                {
+                    let buf = buffer_arc.lock().unwrap();
+                    if !buf.is_empty() {
+                        break;
+                    }
+                }
+                tokio::time::sleep(poll_interval.min(deadline - tokio::time::Instant::now()))
+                    .await;
+            }
+        }
+
+        // Drain the buffer
+        let events: Vec<_> = {
+            let mut buf = buffer_arc.lock().unwrap();
+            buf.drain(..).collect()
+        };
+
+        if events.is_empty() {
+            let result = ToolCallResult::text("No events");
+            return Ok(serde_json::to_value(result).unwrap());
+        }
+
+        let mut lines = Vec::with_capacity(events.len() + 1);
+        lines.push(format!("Events ({}):", events.len()));
+        for event in &events {
+            let type_str = match event.event_type {
+                NarrativeEventType::Notify => "notify",
+                NarrativeEventType::Traceback => "traceback",
+                NarrativeEventType::Present => "present",
+                NarrativeEventType::Unpresent => "unpresent",
+            };
+            let ts = event
+                .timestamp
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| format!("{:.3}", d.as_secs_f64()))
+                .unwrap_or_else(|_| "unknown".to_string());
+            lines.push(format!("  [{}] {}: {}", ts, type_str, event.content));
+        }
+
+        let result = ToolCallResult::text(lines.join("\n"));
         Ok(serde_json::to_value(result).unwrap())
     }
 
@@ -389,12 +850,12 @@ impl McpServer {
         call_params: &ToolCallParams,
         dynamic_tool: Option<&DynamicTool>,
         wizard: bool,
+        session_id: Option<&Uuid>,
     ) -> Result<Value, JsonRpcError> {
         let client = self
-            .connections
-            .get(wizard)
+            .get_client_for_tool(wizard, session_id)
             .await
-            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+            .map_err(JsonRpcError::internal_error)?;
 
         let result = Self::execute_tool_dispatch(client, call_params, dynamic_tool).await;
 
@@ -411,24 +872,21 @@ impl McpServer {
                     error_str
                 );
 
-                self.connections
-                    .reconnect(wizard)
-                    .await
-                    .map_err(|reconnect_err| {
-                        error!("Reconnection failed: {}", reconnect_err);
-                        JsonRpcError::internal_error(format!(
-                            "Connection lost and reconnection failed: {}. Original error: {}",
-                            reconnect_err, error_str
-                        ))
-                    })?;
+                // Reconnect the appropriate client
+                let _ = self.sessions.reconnect_all().await.map_err(|reconnect_err| {
+                    error!("Reconnection failed: {}", reconnect_err);
+                    JsonRpcError::internal_error(format!(
+                        "Connection lost and reconnection failed: {}. Original error: {}",
+                        reconnect_err, error_str
+                    ))
+                })?;
 
                 info!("Reconnected successfully, retrying tool call");
 
                 let client = self
-                    .connections
-                    .get(wizard)
+                    .get_client_for_tool(wizard, session_id)
                     .await
-                    .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
+                    .map_err(JsonRpcError::internal_error)?;
 
                 let retry_result = Self::execute_tool_dispatch(client, call_params, dynamic_tool)
                     .await
@@ -466,6 +924,14 @@ impl McpServer {
 
     /// Handle resources/list request
     async fn handle_resources_list(&mut self) -> Result<Value, JsonRpcError> {
+        // In session-only mode, no resources are available
+        if self.sessions.session_only {
+            let result = ResourcesListResult {
+                resources: Vec::new(),
+            };
+            return Ok(serde_json::to_value(result).unwrap());
+        }
+
         // Fetch dynamic resources on first access if not already loaded
         if !self.dynamic_resources_loaded {
             let _ = self.refresh_dynamic_resources().await;
@@ -510,8 +976,8 @@ impl McpServer {
 
         // Fall back to static resource handling
         let client = self
-            .connections
-            .programmer()
+            .sessions
+            .programmer_service_mut()
             .await
             .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
 

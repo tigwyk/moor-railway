@@ -161,3 +161,40 @@ services:
     depends_on:
       moor-daemon:
         condition: service_started
+
+  # MCP host process -- stdio-based MCP server invoked by AI clients, not auto-started.
+  # In session-only mode, agents authenticate via moo_session_login or moo_session_create.
+  # Start with: docker compose run --profile mcp moor-mcp-host
+  moor-mcp-host:
+    profiles:
+      - mcp
+    build:
+      context: .
+      target: backend
+      network: host
+      args:
+        BUILD_PROFILE: ${BUILD_PROFILE:-release-fast}
+    container_name: "moor-mcp-host"
+    user: "${USER_ID}:${GROUP_ID}"
+    working_dir: /db
+    stdin_open: true
+    environment:
+      - RUST_BACKTRACE=1
+      - HOME=/db
+      - XDG_CONFIG_HOME=/db/${RUN_DIR}/config
+      - XDG_DATA_HOME=/db/${RUN_DIR}/local-share
+    volumes:
+      - ./:/db
+      - ./${RUN_DIR}/ipc:/var/run/moor
+    command:
+      - /moor/moor-mcp-host
+      - --rpc-address=ipc:///var/run/moor/rpc.sock
+      - --events-address=ipc:///var/run/moor/events.sock
+      - --session-only
+      - --creation-policy=${MCP_CREATION_POLICY:-open}
+      - --data-dir=/db/${RUN_DIR}/mcp-host-data
+    networks:
+      - moor_net
+    depends_on:
+      moor-daemon:
+        condition: service_started

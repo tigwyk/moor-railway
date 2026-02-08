@@ -52,6 +52,21 @@ fn failure_message(failure: moor_rpc::FailureRef<'_>) -> String {
         .unwrap_or_else(|| "unknown error".to_string())
 }
 
+/// Whether to connect to an existing player or create a new one
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginMode {
+    Connect,
+    Create,
+}
+
+/// Information returned after a successful login
+#[derive(Debug, Clone)]
+pub struct LoginInfo {
+    pub player: Obj,
+    pub connect_type: String,
+    pub player_flags: u16,
+}
+
 /// Configuration for connecting to the mooR daemon
 #[derive(Debug, Clone)]
 pub struct MoorClientConfig {
@@ -75,8 +90,8 @@ pub struct MoorClient {
     auth_token: Option<AuthToken>,
     handler_object: Obj,
     player: Option<Obj>,
-    /// Stored credentials for reconnection
-    stored_credentials: Option<(String, String)>,
+    /// Stored credentials for reconnection (mode, username, password)
+    stored_credentials: Option<(LoginMode, String, String)>,
     /// Handle to the background ping responder task
     ping_responder_handle: Option<JoinHandle<()>>,
     /// Kill switch for the ping responder
@@ -307,9 +322,23 @@ impl MoorClient {
     ///
     /// Stores credentials for automatic re-authentication after reconnection.
     pub async fn login(&mut self, username: &str, password: &str) -> Result<()> {
-        // Store credentials for reconnection
-        self.stored_credentials = Some((username.to_string(), password.to_string()));
-        self.perform_login(username, password, false).await
+        self.login_with_mode(LoginMode::Connect, username, password)
+            .await
+            .map(|_| ())
+    }
+
+    /// Authenticate with a specific login mode (connect or create)
+    ///
+    /// Returns login info including player object, connect type, and player flags.
+    /// Stores credentials and mode for automatic re-authentication after reconnection.
+    pub async fn login_with_mode(
+        &mut self,
+        mode: LoginMode,
+        username: &str,
+        password: &str,
+    ) -> Result<LoginInfo> {
+        self.stored_credentials = Some((mode, username.to_string(), password.to_string()));
+        self.perform_login(mode, username, password, false).await
     }
 
     /// Check if we're authenticated
@@ -320,6 +349,21 @@ impl MoorClient {
     /// Get the current player object
     pub fn player(&self) -> Option<&Obj> {
         self.player.as_ref()
+    }
+
+    /// Get the client UUID (used for event subscription topics)
+    pub fn client_id(&self) -> Uuid {
+        self.client_id
+    }
+
+    /// Get the ZMQ context (for creating additional subscribers)
+    pub fn zmq_context(&self) -> &tmq::Context {
+        &self.zmq_context
+    }
+
+    /// Get the client config
+    pub fn config(&self) -> &MoorClientConfig {
+        &self.config
     }
 
     /// Clear connection state without sending detach message
@@ -486,10 +530,11 @@ impl MoorClient {
         // Re-establish connection
         self.connect().await?;
 
-        // Re-authenticate if we have stored credentials
-        if let Some((username, password)) = self.stored_credentials.clone() {
+        // Re-authenticate if we have stored credentials (always reconnect as Connect)
+        if let Some((_, username, password)) = self.stored_credentials.clone() {
             info!("Re-authenticating as {}...", username);
-            self.perform_login(&username, &password, true).await?;
+            self.perform_login(LoginMode::Connect, &username, &password, true)
+                .await?;
             info!("Successfully re-authenticated as {}", username);
         }
 
@@ -535,20 +580,26 @@ impl MoorClient {
     /// Perform login - shared implementation for login() and reconnect
     async fn perform_login(
         &mut self,
+        mode: LoginMode,
         username: &str,
         password: &str,
         is_reconnect: bool,
-    ) -> Result<()> {
+    ) -> Result<LoginInfo> {
         let client_token = self
             .client_token
             .as_ref()
             .ok_or_else(|| eyre!("Not connected - call connect() first"))?;
 
+        let verb = match mode {
+            LoginMode::Connect => "connect",
+            LoginMode::Create => "create",
+        };
+
         let login_msg = rpc_common::mk_login_command_msg(
             client_token,
             &self.handler_object,
             vec![
-                "connect".to_string(),
+                verb.to_string(),
                 username.to_string(),
                 password.to_string(),
             ],
@@ -560,7 +611,7 @@ impl MoorClient {
         let operation = if is_reconnect {
             format!("Re-login as '{}'", username)
         } else {
-            format!("Login as '{}'", username)
+            format!("{} '{}'", if mode == LoginMode::Create { "Create" } else { "Login as" }, username)
         };
 
         let reply_bytes = self.rpc_call_with_timeout(login_msg, &operation).await?;
@@ -589,12 +640,24 @@ impl MoorClient {
                                     .to_string(),
                             ));
                         }
-                        if let Ok(Some(player_ref)) = login_result.player() {
-                            self.player = Some(
-                                moor_schema::convert::obj_from_ref(player_ref)
-                                    .map_err(|e| eyre!("Failed to decode player: {}", e))?,
-                            );
-                        }
+
+                        let player = if let Ok(Some(player_ref)) = login_result.player() {
+                            let p = moor_schema::convert::obj_from_ref(player_ref)
+                                .map_err(|e| eyre!("Failed to decode player: {}", e))?;
+                            self.player = Some(p);
+                            p
+                        } else {
+                            return Err(eyre!("Login succeeded but no player returned"));
+                        };
+
+                        let connect_type = login_result
+                            .connect_type()
+                            .ok()
+                            .map(|ct| format!("{ct:?}"))
+                            .unwrap_or_else(|| "Unknown".to_string());
+
+                        let player_flags = login_result.player_flags().unwrap_or(0);
+
                         if !is_reconnect {
                             info!("Logged in as {:?}", self.player);
                         }
@@ -607,7 +670,11 @@ impl MoorClient {
                             );
                         }
 
-                        Ok(())
+                        Ok(LoginInfo {
+                            player,
+                            connect_type,
+                            player_flags,
+                        })
                     }
                     _ => Err(eyre!("Unexpected login response")),
                 }

@@ -1,0 +1,76 @@
+# Railway deployment Dockerfile for mooR
+# Multi-service container running daemon, web-host, and frontend
+
+# Backend build stage
+FROM rust:1.92-bookworm AS backend-build
+
+WORKDIR /moor-build
+RUN apt update
+RUN apt -y install clang-16 libclang-16-dev swig python3-dev cmake libc6 git libsodium-dev pkg-config
+
+# Copy Rust workspace
+COPY ./crates ./crates
+COPY ./tools ./tools
+COPY ./Cargo.toml ./Cargo.toml
+COPY ./Cargo.lock ./Cargo.lock
+COPY ./.git ./.git
+
+# Build release binaries
+ARG BUILD_PROFILE=release-fast
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/moor-build/target,sharing=locked \
+    cargo build --profile $BUILD_PROFILE --jobs 6 && \
+    cp -r target/$BUILD_PROFILE /moor-build/target-final
+
+# Frontend build stage
+FROM node:20-bookworm AS frontend-build
+WORKDIR /app
+RUN apt update && apt -y install git
+COPY clients/meadow/package.json ./
+# Copy package-lock.json if it exists, otherwise npm ci will generate it
+COPY clients/meadow/package-lock.json* ./
+RUN npm ci || npm install
+COPY clients/meadow/ .
+RUN npm run build
+
+# Runtime image - slim debian
+FROM debian:bookworm-slim AS runtime
+
+# Install runtime dependencies (including git for fetching cowbell)
+RUN apt update && \
+    apt -y install libssl3 ca-certificates libsodium23 nginx git && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create data directories for persistent volume
+RUN mkdir -p /data/run-cowbell/ipc \
+             /data/run-cowbell/config \
+             /data/run-cowbell/moor-data \
+             /data/run-cowbell/export \
+             /data/run-cowbell/telnet-host-data \
+             /data/run-cowbell/web-host-data \
+             /data/run-cowbell/mcp-host-data \
+             /var/run/moor
+
+# Copy backend binaries
+COPY --from=backend-build /moor-build/target-final/moor-daemon /usr/local/bin/moor-daemon
+COPY --from=backend-build /moor-build/target-final/moor-web-host /usr/local/bin/moor-web-host
+COPY --from=backend-build /moor-build/target-final/moor-telnet-host /usr/local/bin/moor-telnet-host
+COPY --from=backend-build /moor-build/target-final/moor-curl-worker /usr/local/bin/moor-curl-worker
+COPY --from=backend-build /moor-build/target-final/moor-mcp-host /usr/local/bin/moor-mcp-host
+COPY --from=backend-build /moor-build/target-final/moorc /usr/local/bin/moorc
+COPY --from=backend-build /moor-build/target-final/moor-emh /usr/local/bin/moor-emh
+
+# Copy frontend build to nginx
+COPY --from=frontend-build /app/dist /usr/share/nginx/html
+COPY deploy/railway/nginx.conf /etc/nginx/nginx.conf
+
+# Copy startup script and fetch script
+COPY deploy/railway/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY deploy/railway/fetch-cowbell.sh /usr/local/bin/fetch-cowbell.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/fetch-cowbell.sh
+
+# Expose main web port
+EXPOSE 8080
+
+# Use entrypoint script to manage all services
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

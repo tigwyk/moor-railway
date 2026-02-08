@@ -1,0 +1,37 @@
+# Local testing of Railway deployment configuration
+# Usage: docker compose -f docker-compose.railway.yml up --build
+
+networks:
+  moor_net:
+
+services:
+  # Combined service mimicking Railway deployment
+  moor-railway:
+    build:
+      context: .
+      dockerfile: Dockerfile.railway
+    container_name: "moor-railway-test"
+    environment:
+      - RUN_DIR=run-cowbell
+      - BUILD_PROFILE=release-fast
+      - IMPORT_PATH=/data/cores/cowbell/src
+      - USE_BOOLEAN_RETURNS=true
+      - CUSTOM_ERRORS=true
+      - USE_UUOBJIDS=true
+      - ANONYMOUS_OBJECTS=true
+      - ENABLE_EVENTLOG=true
+      - MCP_CREATION_POLICY=open
+    volumes:
+      - ./cores:/data/cores:ro
+      - moor-data:/data/run-cowbell
+      - moor-ipc:/var/run/moor
+    ports:
+      - "8080:8080"  # Frontend + nginx
+      - "8081:8081"  # Web API
+      - "8888:8888"  # Telnet
+    networks:
+      - moor_net
+
+volumes:
+  moor-data:
+  moor-ipc:

@@ -1,0 +1,163 @@
+## Codebase Patterns
+- MCP host crate is at `crates/mcp-host/src/`; main source files: `moor_client.rs`, `mcp_server.rs`, `connection.rs`, `main.rs`
+- `MoorClient` wraps ZMQ RPC calls to the mooR daemon; login uses `mk_login_command_msg` with connect_args vec where args[0] is the verb ("connect" or "create")
+- `Obj` implements `Copy`, so don't use `.clone()` on it (clippy catches this)
+- Login result from daemon includes: `success`, `auth_token`, `connect_type` (ConnectType enum), `player` (Obj), `player_flags` (u16) — defined in `moor_rpc.fbs`
+- Reconnection always uses `LoginMode::Connect` regardless of original mode, since the player already exists after creation
+- Clippy enforces collapsible `if let` chains — use `&&` syntax for nested `if let` guards
+- `SessionManager` in `session_manager.rs` manages dynamic player sessions; `ConnectionManager` in `connection.rs` is the old static approach (will be replaced in US-004)
+- `CreationPolicy` enum (Open/Token/AdminOnly/Disabled) lives in `session_manager.rs`; it implements `FromStr` for clap parsing and `Serialize`/`Deserialize` for figment YAML config
+- `humantime` crate is available in mcp-host for parsing duration strings like "30m", "1h", "300s"
+- CLI args use `String` types for enums/durations, parsed manually after figment extraction, to keep figment YAML compatibility simple
+- `SessionManager` provides `_mut()` variants (`programmer_service_mut`, `wizard_service_mut`, `get_session_client_mut`) that use `Mutex::get_mut()` to bypass locking when `&mut self` is available — preferred for single-threaded `McpServer` usage
+- `McpServer::get_client_for_tool(wizard, session_id)` resolves dispatch: wizard->wizard_service, session_id->session client, current_session->session client, fallback->programmer_service
+- Tool arguments can include `session_id` (optional UUID string) which is extracted in `handle_tools_call` and passed through dispatch
+- Session lifecycle tools (moo_session_create/login/use/close, moo_sessions_list) are meta-tools dispatched directly in `handle_tools_call`, not through the normal client dispatch path
+- `moo_session_create` enforces `check_creation_policy` before creating; `moo_session_login` uses `LoginMode::Connect` (no policy check needed)
+- `set_current` defaults to true on create/login; `moo_session_close` clears `current_session_id` if closing the current session
+- `PlayerSession` has a background event subscription task (ZMQ subscriber) and implements `Drop` to clean it up; use `drain_events()` to retrieve buffered events
+- ZMQ event subscription uses `events_recv(client_id, &mut subscriber)` and topic filter is `client_id.as_bytes()`; match on `ClientEventUnionRef` variants for event types
+- `MoorClient` exposes `client_id()`, `zmq_context()`, `config()` getters for creating external subscribers
+- `PlayerSession::event_buffer_arc()` returns a cloneable `Arc<Mutex<VecDeque<BufferedEvent>>>` for async event polling outside of SessionManager borrow scope
+
+## 2026-02-07 - US-001
+Thread: https://ampcode.com/threads/T-019c3a3d-3dab-71ec-acfe-5b8b5ea80e2d
+- Added `LoginMode` enum (Connect, Create) and `LoginInfo` struct to `moor_client.rs`
+- Added `login_with_mode()` method; existing `login()` delegates to it with `LoginMode::Connect`
+- `perform_login()` now accepts `LoginMode` and returns `Result<LoginInfo>` with player, connect_type, and player_flags
+- Stored credentials tuple expanded to `(LoginMode, String, String)` for reconnection support
+- Reconnect always uses `LoginMode::Connect` (player already exists after creation)
+- Files changed: `crates/mcp-host/src/moor_client.rs`
+- **Learnings for future iterations:**
+  - The flatbuffer schema at `crates/schema/schema/moor_rpc.fbs` defines the RPC message types
+  - `ConnectType` enum: Connected=0, Reconnected=1, Created=2, NoConnect=255
+  - `login_result.connect_type()` and `login_result.player_flags()` are available but weren't previously extracted
+---
+## 2026-02-07 - US-002
+Thread: https://ampcode.com/threads/T-019c3a40-7306-7303-81ca-a138fcc9e7bd
+- Created `session_manager.rs` with `PlayerSession`, `SessionManager`, `SessionStatus`, `SessionInfo`, `ServiceCredentials` structs
+- `SessionManager` holds config, optional programmer/wizard service clients (lazy), sessions HashMap, max_sessions, and session_idle_ttl
+- Methods: `new`, `create_session`, `get_session`, `close_session`, `list_sessions`, `cleanup_expired_sessions`, `disconnect_all`, `programmer_service`, `wizard_service`
+- Added `mod session_manager` to main.rs
+- Files changed: `crates/mcp-host/src/session_manager.rs` (new), `crates/mcp-host/src/main.rs`
+- **Learnings for future iterations:**
+  - Clippy enforces collapsible `if let` chains — use `&&` syntax for nested `if let` with `let Err(e)` guards
+  - `SessionManager` uses `Mutex<MoorClient>` (not async Mutex) since MoorClient ops are short RPC calls
+  - Service clients (programmer/wizard) are created lazily on first access, same pattern as `ConnectionManager`
+  ---
+  ## 2026-02-07 - US-003
+  Thread: https://ampcode.com/threads/T-019c3a42-0e47-711e-8959-88c0f22da68e
+  - Added `CreationPolicy` enum with Open, Token, AdminOnly, Disabled variants to `session_manager.rs`
+  - Added `check_creation_policy(provided_token)` method to `SessionManager`
+  - Added CLI args: `--creation-policy`, `--creation-token`, `--max-sessions`, `--session-idle-ttl`
+  - All args also configurable via YAML config file (figment merge)
+  - Validates token policy requires `--creation-token` at startup
+  - Added `humantime` dependency for duration string parsing
+  - Files changed: `crates/mcp-host/Cargo.toml`, `crates/mcp-host/src/session_manager.rs`, `crates/mcp-host/src/main.rs`
+  - **Learnings for future iterations:**
+  - Use `String` for CLI arg types when figment YAML needs to parse them too, then convert manually after extraction
+  - `humantime::parse_duration` handles formats like "30m", "1h", "300s"
+  - `CreationPolicy` implements both `FromStr` (for CLI) and serde (for YAML), with `rename_all = "kebab-case"`
+  ---
+## 2026-02-07 - US-004
+Thread: https://ampcode.com/threads/T-019c3a44-0577-71a4-936e-354add265b89
+- Replaced `ConnectionManager` with `SessionManager` in `McpServer`
+- Added `current_session_id: Option<Uuid>` to `McpServer`
+- Added `get_client_for_tool(wizard, session_id)` async method for dispatch resolution
+- Added `programmer_service_mut`, `wizard_service_mut`, `get_session_client_mut` methods to `SessionManager` using `Mutex::get_mut()`
+- Added `reconnect_all()` to `SessionManager` that reconnects service clients and active sessions
+- Updated `main.rs` to construct `SessionManager` with all config args (creation_policy, max_sessions, session_idle_ttl, creation_token)
+- All existing tool dispatch, dynamic tool/resource fetching, reconnect, and shutdown flows updated
+- Files changed: `crates/mcp-host/src/mcp_server.rs`, `crates/mcp-host/src/main.rs`, `crates/mcp-host/src/session_manager.rs`
+- **Learnings for future iterations:**
+  - `Mutex::get_mut()` returns `&mut T` without locking when you have `&mut Mutex<T>` — ideal for single-threaded McpServer
+  - `connection.rs` is now fully dead code; all warnings are expected until US-010 removes it
+  - The `session_id` parameter is extracted from tool arguments as an optional UUID string in `handle_tools_call`
+---
+## 2026-02-07 - US-005
+Thread: https://ampcode.com/threads/T-019c3a48-7d78-748f-a133-a621aa699855
+- Added 5 session lifecycle MCP tools as meta-tools in `mcp_server.rs`
+- `moo_session_create`: creates player account + session, enforces creation policy
+- `moo_session_login`: logs into existing account, creates session
+- `moo_session_use`: sets current active session by ID
+- `moo_session_close`: disconnects/removes a session (defaults to current)
+- `moo_sessions_list`: lists all sessions with status, player, last_used
+- All tools registered in `handle_tools_list()` and dispatched in `handle_tools_call()` before normal tool dispatch
+- Files changed: `crates/mcp-host/src/mcp_server.rs`, `prd.json`, `progress.txt`
+- **Learnings for future iterations:**
+  - Meta-tools that need SessionManager access are dispatched early in `handle_tools_call` with explicit `if` checks, before wizard/session_id extraction for normal tools
+  - `ToolCallResult::text()` and `ToolCallResult::error()` are the standard way to return success/error from meta-tools
+  - `SessionStatus` doesn't implement `Display`; format manually with match
+---
+## 2026-02-07 - US-006
+- Added `add_session_id_param()` helper function in `tools/helpers.rs` that adds optional `session_id` (UUID string) property to a tool's input_schema
+- Applied `add_session_id_param()` to all 39 non-wizard-only tools in `get_tools()` via wrapping: `add_session_id_param(with_wizard_param(...))`
+- Wizard-only tools (10 total) do NOT get session_id param — they always use the wizard service connection
+- `moo_reconnect` also excluded — it reconnects everything, not a specific session
+- Session_id extraction and dispatch already implemented in US-004/US-005 (`handle_tools_call` extracts session_id from arguments and passes to `get_client_for_tool`)
+- Files changed: `crates/mcp-host/src/tools/helpers.rs`, `crates/mcp-host/src/tools/mod.rs`
+- **Learnings for future iterations:**
+  - `add_session_id_param()` follows the same pattern as `with_wizard_param()` — mutating `input_schema.properties` on a Tool
+  - The order `add_session_id_param(with_wizard_param(tool))` means both params are present; order doesn't matter since both just insert into properties
+  - No changes needed to execute functions or dispatch — they already handle session_id extraction
+---
+## 2026-02-07 - US-007
+- Added `BufferedEvent` struct and `NarrativeEventType` enum to `session_manager.rs` for typed event buffering
+- Added bounded event buffer (`VecDeque` with max 1000 entries) to `PlayerSession`, wrapped in `Arc<Mutex<...>>` for background task sharing
+- Added `event_kill_switch` (`Arc<AtomicBool>`) and `event_task_handle` (`Option<JoinHandle<()>>`) to `PlayerSession`
+- Implemented `start_event_subscription()` on `SessionManager` that creates a ZMQ events subscriber and spawns a background tokio task
+- Background task follows the same ZMQ subscriber pattern as the ping responder in `MoorClient` (CURVE encryption, topic subscription by client_id)
+- Events are parsed via `narrative_event_from_ref()` and categorized into Notify/Traceback/Present/Unpresent types
+- SystemMessageEvent is also captured as Notify type
+- Added `drain_events()` and `event_count()` methods to `PlayerSession`
+- Added `Drop` impl for `PlayerSession` that stops the event subscription task
+- Added `client_id()`, `zmq_context()`, `config()` getter methods to `MoorClient`
+- Updated `close_session` to use `get_mut()` instead of `into_inner()` to avoid partial move issues with Drop
+- Event subscription starts automatically after successful login in `create_session`
+- Added local `format_var_for_narrative()` in session_manager.rs (mirrors moor_client.rs version)
+- Files changed: `crates/mcp-host/src/session_manager.rs`, `crates/mcp-host/src/moor_client.rs`
+- **Learnings for future iterations:**
+  - `events_recv(client_id, subscriber)` returns `ClientEventMessage` which wraps a FlatBuffer; access via `.event()?.event()?` to get `ClientEventUnionRef`
+  - ZMQ events are topic-filtered by `client_id.as_bytes()` — each client only sees its own events
+  - `narrative_event_from_ref()` converts FlatBuffer ref to owned `NarrativeEvent` with `event_id`, `timestamp`, `author`, `event` fields
+  - `PlayerSession` now implements `Drop` — be careful with partial moves; use `get_mut()` instead of `into_inner()` on Mutex fields
+  - The `format_var_for_narrative` function is duplicated between moor_client.rs and session_manager.rs; a future cleanup could extract it to a shared utility
+---
+## 2026-02-07 - US-008
+- Added `moo_session_events` meta-tool for polling narrative events from a player session
+- Tool accepts optional `session_id` (defaults to current session) and `timeout_ms` (default: 5000)
+- `timeout_ms: 0` returns immediately with whatever is buffered; `timeout_ms > 0` polls at 50ms intervals until events arrive or timeout
+- Events are drained from the session's buffer and returned as `[timestamp] type: content` lines
+- Added `event_buffer_arc()` method to `PlayerSession` for async polling (clones the `Arc<Mutex<VecDeque<BufferedEvent>>>`)
+- Tool registered in `handle_tools_list()` and dispatched as a meta-tool in `handle_tools_call()`
+- Returns "No events" when buffer is empty after timeout, or clear error when session_id is invalid/missing
+- Files changed: `crates/mcp-host/src/mcp_server.rs`, `crates/mcp-host/src/session_manager.rs`
+- **Learnings for future iterations:**
+  - For async polling of synchronous `Mutex<VecDeque>` buffers, clone the `Arc` to release the borrow on SessionManager, then poll with `tokio::time::sleep` intervals
+  - Meta-tools that need SessionManager access (not just a MoorClient) are dispatched early in `handle_tools_call` before the wizard/session_id extraction for normal tools
+  - `NarrativeEventType` needs to be imported into mcp_server.rs for formatting event output
+---
+## 2026-02-07 - US-009
+- Updated `SessionManager::reconnect_all()` to retry Errored sessions (not just Active ones)
+- On successful reconnect, Errored sessions have status restored to Active
+- Only Expired sessions are skipped during reconnect
+- Result message now explicitly reports both successes and failures (e.g., "Reconnected: ... \n Failed: ...")
+- Service client (programmer/wizard) reconnect failures are also reported in the result message
+- Files changed: `crates/mcp-host/src/session_manager.rs`
+- **Learnings for future iterations:**
+  - Most of US-009's acceptance criteria were already satisfied by `reconnect_all()` from US-004; the main gaps were: errored session retry and explicit failure reporting
+  - `session.status = SessionStatus::Active` must be set on successful reconnect to recover errored sessions
+  - The reconnect result message uses `\n` to separate the "Reconnected" and "Failed" sections for readability in MCP tool output
+---
+## 2026-02-07 - US-010
+- Deleted `connection.rs` (ConnectionManager fully replaced by SessionManager)
+- Removed `mod connection;` declaration from `main.rs`
+- Updated doc comment in `main.rs` to reflect session-based connection model
+- Verified: cargo check passes, cargo test passes (0 tests), cargo clippy passes with no new warnings
+- Pre-existing dead code warnings are from public API methods added in US-001 through US-009 (not related to connection module)
+- Files changed: `crates/mcp-host/src/connection.rs` (deleted), `crates/mcp-host/src/main.rs`
+- **Learnings for future iterations:**
+  - The cleanup was minimal because US-004 already fully replaced all ConnectionManager usage with SessionManager
+  - Only two references existed: the `mod connection;` declaration and the file itself — no `use` imports anywhere
+  - Dead code warnings for unused `pub` methods are expected in library-like code that exposes an API; they don't indicate problems
+---

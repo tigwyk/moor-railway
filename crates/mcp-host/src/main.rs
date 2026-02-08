@@ -35,25 +35,28 @@
 //!
 //! # Connection Model
 //!
-//! The MCP host supports two connection types:
-//! - **Programmer**: Default connection used for most operations. Uses `--username`/`--password`.
-//! - **Wizard**: Elevated privileges for operations like dump/load. Uses `--wizard-username`/`--wizard-password`.
+//! The MCP host uses a SessionManager that supports:
+//! - **Service connections** (programmer/wizard): Static connections for tool dispatch.
+//!   - **Programmer**: Default connection for most operations. Uses `--username`/`--password`.
+//!   - **Wizard**: Elevated privileges for operations like dump/load. Uses `--wizard-username`/`--wizard-password`.
+//! - **Dynamic player sessions**: Created at runtime via `moo_session_create`/`moo_session_login` tools.
 //!
-//! Connections are established lazily on first use. Most tools default to programmer mode
-//! and accept an optional `wizard: true` parameter for elevated access. Some tools (objdef
+//! Service connections are established lazily on first use. Most tools default to programmer mode
+//! and accept optional `wizard: true` and `session_id` parameters. Some tools (objdef
 //! operations) always require wizard privileges.
 
-mod connection;
 mod mcp_server;
 mod mcp_types;
 mod moor_client;
 mod prompts;
 mod resources;
+mod session_manager;
 mod tools;
+
+use std::time::Duration;
 
 use clap::Parser;
 use clap_derive::Parser;
-use connection::{ConnectionConfig, ConnectionManager, Credentials};
 use eyre::Result;
 use figment::{
     Figment,
@@ -63,6 +66,7 @@ use mcp_server::McpServer;
 use moor_client::MoorClientConfig;
 use rpc_common::client_args::RpcClientArgs;
 use serde_derive::{Deserialize, Serialize};
+use session_manager::{CreationPolicy, ServiceCredentials, SessionManager};
 use tracing::{info, warn};
 
 /// mooR MCP Host - AI assistant interface for MOO virtual worlds
@@ -93,6 +97,26 @@ struct Args {
     /// Enable debug logging (logs go to stderr to avoid interfering with MCP)
     #[arg(long, default_value = "false")]
     debug: bool,
+
+    /// Run in session-only mode: no pre-configured service connections, agents must authenticate first
+    #[arg(long, default_value = "false")]
+    session_only: bool,
+
+    /// Policy for agent account creation: open, token, admin-only, disabled
+    #[arg(long, default_value = "open")]
+    creation_policy: String,
+
+    /// Token required for account creation when policy is 'token'
+    #[arg(long)]
+    creation_token: Option<String>,
+
+    /// Maximum number of concurrent player sessions
+    #[arg(long, default_value = "100")]
+    max_sessions: usize,
+
+    /// Idle timeout for player sessions (e.g. '30m', '1h', '300s')
+    #[arg(long, default_value = "30m")]
+    session_idle_ttl: String,
 
     /// YAML config file to use (overrides CLI args)
     #[arg(long)]
@@ -142,7 +166,7 @@ async fn main() -> Result<()> {
     let programmer_credentials = match (&args.username, &args.password) {
         (Some(username), Some(password)) => {
             info!("Programmer credentials configured for {}", username);
-            Some(Credentials {
+            Some(ServiceCredentials {
                 username: username.clone(),
                 password: password.clone(),
             })
@@ -153,7 +177,7 @@ async fn main() -> Result<()> {
     let wizard_credentials = match (&args.wizard_username, &args.wizard_password) {
         (Some(username), Some(password)) => {
             info!("Wizard credentials configured for {}", username);
-            Some(Credentials {
+            Some(ServiceCredentials {
                 username: username.clone(),
                 password: password.clone(),
             })
@@ -161,16 +185,41 @@ async fn main() -> Result<()> {
         _ => None,
     };
 
-    // Create the connection manager
-    let connection_config = ConnectionConfig {
+    // Parse session configuration
+    let creation_policy: CreationPolicy = args
+        .creation_policy
+        .parse()
+        .map_err(|e: String| eyre::eyre!(e))?;
+    let session_idle_ttl: Duration = humantime::parse_duration(&args.session_idle_ttl)
+        .map_err(|e| eyre::eyre!("Invalid session-idle-ttl '{}': {}", args.session_idle_ttl, e))?;
+
+    if creation_policy == CreationPolicy::Token && args.creation_token.is_none() {
+        return Err(eyre::eyre!(
+            "Creation policy is 'token' but --creation-token was not provided"
+        ));
+    }
+
+    info!("Creation policy: {creation_policy}");
+    info!("Max sessions: {}", args.max_sessions);
+    info!("Session idle TTL: {}", args.session_idle_ttl);
+    if args.session_only {
+        info!("Session-only mode: enabled (no service connections)");
+    }
+
+    // Create the session manager
+    let sessions = SessionManager::new(
         client_config,
         programmer_credentials,
         wizard_credentials,
-    };
-    let connections = ConnectionManager::new(connection_config);
+        args.max_sessions,
+        session_idle_ttl,
+        creation_policy,
+        args.creation_token,
+        args.session_only,
+    );
 
     // Create MCP server
-    let mut server = McpServer::new(connections);
+    let mut server = McpServer::new(sessions);
 
     // Run the MCP server
     info!("MCP server ready, listening on stdio");
