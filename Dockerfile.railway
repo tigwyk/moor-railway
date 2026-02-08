@@ -13,7 +13,7 @@ COPY ./crates ./crates
 COPY ./tools ./tools
 COPY ./Cargo.toml ./Cargo.toml
 COPY ./Cargo.lock ./Cargo.lock
-COPY ./.git ./.git
+# Skip .git for Railway (large directory causes build context issues)
 
 # Build release binaries (no cache mounts for Railway compatibility)
 ARG BUILD_PROFILE=release-fast
