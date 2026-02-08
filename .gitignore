@@ -48,6 +48,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
+venv/
+.venv/
 
 # LambdaMOO sources (fetched by setup script for comparative testing)
 lambdamoo/
