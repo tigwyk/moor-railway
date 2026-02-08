@@ -1,18 +1,17 @@
-# mooR on Railway - Multi-Service Configuration
-# All services pull from pre-built DockerHub images
+# mooR Railway Monorepo Configuration
+# Each service uses a minimal Dockerfile that pulls from DockerHub
 
 # ============================================================================
-# DAEMON SERVICE - Core MOO database and RPC server
+# DAEMON SERVICE
 # ============================================================================
-[daemon]
-builder = "DOCKERFILE"
+[daemon.build]
 dockerfilePath = "Dockerfile.daemon"
 
 [daemon.deploy]
 restartPolicyType = "ALWAYS"
-startCommand = ""
+numReplicas = 1
 
-# Expose all TCP ports for inter-service communication
+# TCP ports for inter-service communication
 [[daemon.ports]]
 port = 7899
 type = "TCP"
@@ -40,10 +39,6 @@ name = "daemon-data"
 mountPath = "/data"
 
 [daemon.env]
-# Use DockerHub image
-RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-daemon:latest"
-
-# Core configuration
 IMPORT_PATH = "/data/cores/cowbell/src"
 USE_BOOLEAN_RETURNS = "true"
 CUSTOM_ERRORS = "true"
@@ -52,15 +47,14 @@ ANONYMOUS_OBJECTS = "true"
 ENABLE_EVENTLOG = "true"
 
 # ============================================================================
-# TELNET SERVICE - Classic telnet interface
+# TELNET SERVICE
 # ============================================================================
-[telnet]
-builder = "DOCKERFILE"
+[telnet.build]
 dockerfilePath = "Dockerfile.telnet"
 
 [telnet.deploy]
 restartPolicyType = "ALWAYS"
-startCommand = ""
+numReplicas = 1
 
 [[telnet.ports]]
 port = 8888
@@ -72,25 +66,20 @@ name = "telnet-data"
 mountPath = "/data"
 
 [telnet.env]
-# Use DockerHub image
-RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-telnet-host:latest"
-
-# Connect to daemon via Railway service discovery
 DAEMON_SERVICE_NAME = "daemon"
 DAEMON_RPC_PORT = "7899"
 DAEMON_EVENTS_PORT = "7898"
 DAEMON_ENROLLMENT_PORT = "7900"
 
 # ============================================================================
-# WEB HOST SERVICE - HTTP/WebSocket API
+# WEB HOST SERVICE
 # ============================================================================
-[webhost]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile.web-host.railway"
+[webhost.build]
+dockerfilePath = "Dockerfile.webhost"
 
 [webhost.deploy]
 restartPolicyType = "ALWAYS"
-startCommand = ""
+numReplicas = 1
 
 [[webhost.ports]]
 port = 8081
@@ -102,25 +91,20 @@ name = "webhost-data"
 mountPath = "/data"
 
 [webhost.env]
-# Use DockerHub image
-RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-web-host:latest"
-
-# Connect to daemon via Railway service discovery
 DAEMON_SERVICE_NAME = "daemon"
 DAEMON_RPC_PORT = "7899"
 DAEMON_EVENTS_PORT = "7898"
 DAEMON_ENROLLMENT_PORT = "7900"
 
 # ============================================================================
-# WORKER SERVICE - Background HTTP request processing
+# WORKER SERVICE
 # ============================================================================
-[worker]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile.worker.railway"
+[worker.build]
+dockerfilePath = "Dockerfile.worker"
 
 [worker.deploy]
 restartPolicyType = "ALWAYS"
-startCommand = ""
+numReplicas = 1
 
 [[worker.volumes]]
 type = "persistent"
@@ -128,10 +112,6 @@ name = "worker-data"
 mountPath = "/data"
 
 [worker.env]
-# Use DockerHub image
-RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-worker:latest"
-
-# Connect to daemon via Railway service discovery
 DAEMON_SERVICE_NAME = "daemon"
 DAEMON_RPC_PORT = "7899"
 DAEMON_EVENTS_PORT = "7898"
@@ -140,15 +120,14 @@ DAEMON_WORKERS_RESPONSE_PORT = "7897"
 DAEMON_ENROLLMENT_PORT = "7900"
 
 # ============================================================================
-# FRONTEND SERVICE - Meadow web UI
+# FRONTEND SERVICE
 # ============================================================================
-[frontend]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile.frontend.railway"
+[frontend.build]
+dockerfilePath = "Dockerfile.frontend"
 
 [frontend.deploy]
 restartPolicyType = "ALWAYS"
-startCommand = ""
+numReplicas = 1
 healthcheckPath = "/"
 
 [[frontend.ports]]
@@ -156,9 +135,5 @@ port = 80
 type = "HTTP"
 
 [frontend.env]
-# Use DockerHub image
-RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-frontend:latest"
-
-# Connect to webhost via Railway service discovery
 WEB_HOST_SERVICE_NAME = "webhost"
 WEB_HOST_PORT = "8081"
