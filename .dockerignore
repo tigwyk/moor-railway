@@ -54,8 +54,9 @@ debian-pkg*/
 .dockerignore
 docker-compose.yml
 
-# Deployment scripts
-deploy/
+# Deployment scripts (but keep railway deployment files)
+deploy/*
+!deploy/railway/
 
 # Local development config
 .env
