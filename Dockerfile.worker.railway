@@ -1,0 +1,55 @@
+# mooR Curl Worker for Railway
+# Background worker for HTTP requests, connects to daemon via Railway's private networking
+
+FROM rust:1.92-bookworm AS builder
+
+WORKDIR /moor
+RUN apt update && apt -y install clang-16 libclang-16-dev cmake libsodium-dev pkg-config git
+
+# Copy source
+COPY crates ./crates
+COPY tools ./tools
+COPY Cargo.toml Cargo.lock ./
+
+# Build curl-worker binary
+ARG BUILD_PROFILE=release-fast
+RUN cargo build --profile $BUILD_PROFILE --bin moor-curl-worker && \
+    cp target/$BUILD_PROFILE/moor-curl-worker /usr/local/bin/
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt update && \
+    apt -y install libssl3 libsodium23 ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create data directory for worker state
+RUN mkdir -p /data/.moor-host-data
+
+COPY --from=builder /usr/local/bin/moor-curl-worker /usr/local/bin/
+
+# Create entrypoint to start curl-worker with Railway service discovery
+# The daemon service is accessible via Railway's private networking at:
+# daemon.railway.internal (or via environment variable DAEMON_URL)
+RUN printf '#!/bin/sh\n\
+cd /data\n\
+# Railway service discovery: daemon service in same project\n\
+DAEMON_HOST="${DAEMON_SERVICE_NAME:-daemon}.railway.internal"\n\
+DAEMON_RPC_PORT="${DAEMON_RPC_PORT:-7899}"\n\
+DAEMON_EVENTS_PORT="${DAEMON_EVENTS_PORT:-7898}"\n\
+DAEMON_WORKERS_REQUEST_PORT="${DAEMON_WORKERS_REQUEST_PORT:-7896}"\n\
+DAEMON_WORKERS_RESPONSE_PORT="${DAEMON_WORKERS_RESPONSE_PORT:-7897}"\n\
+DAEMON_ENROLLMENT_PORT="${DAEMON_ENROLLMENT_PORT:-7900}"\n\
+echo "Connecting to daemon at $DAEMON_HOST for worker requests"\n\
+exec moor-curl-worker \\\n\
+  --rpc-address=tcp://${DAEMON_HOST}:${DAEMON_RPC_PORT} \\\n\
+  --events-address=tcp://${DAEMON_HOST}:${DAEMON_EVENTS_PORT} \\\n\
+  --workers-request-address=tcp://${DAEMON_HOST}:${DAEMON_WORKERS_REQUEST_PORT} \\\n\
+  --workers-response-address=tcp://${DAEMON_HOST}:${DAEMON_WORKERS_RESPONSE_PORT} \\\n\
+  --enrollment-address=tcp://${DAEMON_HOST}:${DAEMON_ENROLLMENT_PORT}\n\
+' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENV RUST_BACKTRACE=1
+ENV HOME=/data
+
+ENTRYPOINT ["/entrypoint.sh"]

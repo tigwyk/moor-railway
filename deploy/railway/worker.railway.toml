@@ -1,0 +1,22 @@
+# Railway configuration for mooR Curl Worker service
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "../Dockerfile.worker.railway"
+buildTimeout = 1800
+
+[deploy]
+startCommand = ""
+restartPolicyType = "ALWAYS"
+
+# Worker runs in background, no exposed ports needed
+# It connects to daemon via Railway's private networking
+
+[env]
+BUILD_PROFILE = "release-fast"
+# Railway service discovery - daemon is the service name in the same project
+DAEMON_SERVICE_NAME = "daemon"
+DAEMON_RPC_PORT = "7899"
+DAEMON_EVENTS_PORT = "7898"
+DAEMON_WORKERS_REQUEST_PORT = "7896"
+DAEMON_WORKERS_RESPONSE_PORT = "7897"
+DAEMON_ENROLLMENT_PORT = "7900"

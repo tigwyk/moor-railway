@@ -1,0 +1,19 @@
+# Railway configuration for Meadow Frontend service
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "../Dockerfile.frontend.railway"
+buildTimeout = 1800
+
+[deploy]
+startCommand = ""
+restartPolicyType = "ALWAYS"
+
+# Expose public HTTP port
+[[services.ports]]
+port = 80
+type = "HTTP"
+# Handle health checks - nginx will proxy /health to web-host
+healthCheckPath = "/health"
+
+[env]
+BUILD_PROFILE = "release-fast"

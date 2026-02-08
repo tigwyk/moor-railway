@@ -1,0 +1,39 @@
+# mooR Telnet Host for Railway
+FROM rust:1.92-bookworm AS builder
+
+WORKDIR /moor
+RUN apt update && apt -y install clang-16 libclang-16-dev cmake libsodium-dev pkg-config git
+
+COPY crates ./crates
+COPY tools ./tools
+COPY Cargo.toml Cargo.lock ./
+
+ARG BUILD_PROFILE=release-fast
+RUN cargo build --profile $BUILD_PROFILE --bin moor-telnet-host && \
+    cp target/$BUILD_PROFILE/moor-telnet-host /usr/local/bin/
+
+FROM debian:bookworm-slim
+
+RUN apt update && \
+    apt -y install libssl3 libsodium23 ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /data
+
+COPY --from=builder /usr/local/bin/moor-telnet-host /usr/local/bin/
+
+EXPOSE 8888
+
+ENV RUST_BACKTRACE=1
+ENV HOME=/data
+
+# Get daemon service URL from Railway environment
+# DAEMON_PUBLICK_URL will be set by Railway
+CMD ["sh", "-c", \
+     "moor-telnet-host \
+     --telnet-address=0.0.0.0 \
+     --telnet-port=8888 \
+     --rpc-address=tcp://${DAEMON_PUBLIC_URL:-enthusiastic-liberation-production-*.up.railway.app}:7899 \
+     --events-address=tcp://${DAEMON_PUBLIC_URL:-enthusiastic-liberation-production-*.up.railway.app}:7898 \
+     --enrollment-address=tcp://${DAEMON_PUBLIC_URL:-enthusiastic-liberation-production-*.up.railway.app}:7900 \
+     --data-dir=/data/telnet-host-data"]

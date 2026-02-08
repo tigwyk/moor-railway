@@ -1,0 +1,55 @@
+# mooR Web Host for Railway
+# Connects to the daemon service via Railway's private networking
+
+FROM rust:1.92-bookworm AS builder
+
+WORKDIR /moor
+RUN apt update && apt -y install clang-16 libclang-16-dev cmake libsodium-dev pkg-config git
+
+# Copy source
+COPY crates ./crates
+COPY tools ./tools
+COPY Cargo.toml Cargo.lock ./
+
+# Build web-host binary
+ARG BUILD_PROFILE=release-fast
+RUN cargo build --profile $BUILD_PROFILE --bin moor-web-host && \
+    cp target/$BUILD_PROFILE/moor-web-host /usr/local/bin/
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt update && \
+    apt -y install libssl3 libsodium23 ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create data directory for host state
+RUN mkdir -p /data/.moor-host-data
+
+COPY --from=builder /usr/local/bin/moor-web-host /usr/local/bin/
+
+# Create entrypoint to start web-host with Railway service discovery
+# The daemon service is accessible via Railway's private networking at:
+# daemon.railway.internal (or via environment variable DAEMON_URL)
+RUN printf '#!/bin/sh\n\
+cd /data\n\
+# Railway service discovery: daemon service in same project\n\
+DAEMON_HOST="${DAEMON_SERVICE_NAME:-daemon}.railway.internal"\n\
+DAEMON_RPC_PORT="${DAEMON_RPC_PORT:-7899}"\n\
+DAEMON_EVENTS_PORT="${DAEMON_EVENTS_PORT:-7898}"\n\
+DAEMON_ENROLLMENT_PORT="${DAEMON_ENROLLMENT_PORT:-7900}"\n\
+echo "Connecting to daemon at $DAEMON_HOST:$DAEMON_RPC_PORT"\n\
+exec moor-web-host \\\n\
+  --listen-address=0.0.0.0:8081 \\\n\
+  --rpc-address=tcp://${DAEMON_HOST}:${DAEMON_RPC_PORT} \\\n\
+  --events-address=tcp://${DAEMON_HOST}:${DAEMON_EVENTS_PORT} \\\n\
+  --enrollment-address=tcp://${DAEMON_HOST}:${DAEMON_ENROLLMENT_PORT}\n\
+' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+# Expose web host API port
+EXPOSE 8081
+
+ENV RUST_BACKTRACE=1
+ENV HOME=/data
+
+ENTRYPOINT ["/entrypoint.sh"]

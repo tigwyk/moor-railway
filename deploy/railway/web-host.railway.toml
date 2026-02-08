@@ -1,0 +1,22 @@
+# Railway configuration for mooR Web Host service
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "../Dockerfile.web-host.railway"
+buildTimeout = 1800
+
+[deploy]
+startCommand = ""
+restartPolicyType = "ALWAYS"
+
+# Expose web host API port for frontend and direct access
+[[services.ports]]
+port = 8081
+type = "TCP"
+
+[env]
+BUILD_PROFILE = "release-fast"
+# Railway service discovery - daemon is the service name in the same project
+DAEMON_SERVICE_NAME = "daemon"
+DAEMON_RPC_PORT = "7899"
+DAEMON_EVENTS_PORT = "7898"
+DAEMON_ENROLLMENT_PORT = "7900"
