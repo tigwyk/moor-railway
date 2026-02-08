@@ -1,4 +1,4 @@
-# Railway deployment Dockerfile for mooR
+# Railway deployment Dockerfile for mooR v2
 # Multi-service container running daemon, web-host, and frontend
 
 # Backend build stage
