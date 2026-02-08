@@ -69,16 +69,20 @@ impl McpServer {
     /// Resolve the appropriate MoorClient for a tool call.
     ///
     /// Resolution order:
-    /// 1. `wizard` is true -> wizard service client
+    /// 1. `wizard` is true -> wizard service client (error in session-only mode)
     /// 2. `session_id_param` is Some -> that session's client
     /// 3. `self.current_session_id` is Some -> current session's client
-    /// 4. Fallback -> programmer service client
+    /// 4. Fallback -> programmer service client (error in session-only mode)
     async fn get_client_for_tool(
         &mut self,
         wizard: bool,
         session_id_param: Option<&Uuid>,
     ) -> Result<&mut MoorClient, String> {
+        // In session-only mode, wizard mode is not available
         if wizard {
+            if self.sessions.session_only {
+                return Err("Wizard mode is not available in session-only mode".to_string());
+            }
             return self
                 .sessions
                 .wizard_service_mut()
@@ -94,6 +98,13 @@ impl McpServer {
                 .map_err(|e| e.to_string());
         }
 
+        // In session-only mode, require an active session
+        if self.sessions.session_only {
+            return Err(
+                "No active session. Use moo_session_login or moo_session_create first.".to_string()
+            );
+        }
+
         self.sessions
             .programmer_service_mut()
             .await
@@ -103,7 +114,13 @@ impl McpServer {
     /// Refresh dynamic tools from the MOO world
     ///
     /// Calls #0:external_agent_tools() and updates the stored tool list.
+    /// In session-only mode, dynamic tools are not available.
     async fn refresh_dynamic_tools(&mut self) -> Result<usize, String> {
+        if self.sessions.session_only {
+            self.dynamic_tools_loaded = true;
+            return Err("Dynamic tools are not available in session-only mode".to_string());
+        }
+
         let client = self
             .sessions
             .programmer_service_mut()
@@ -129,7 +146,13 @@ impl McpServer {
     /// Refresh dynamic resources from the MOO world
     ///
     /// Calls #0:external_agent_resources() and updates the stored resource list.
+    /// In session-only mode, dynamic resources are not available.
     async fn refresh_dynamic_resources(&mut self) -> Result<usize, String> {
+        if self.sessions.session_only {
+            self.dynamic_resources_loaded = true;
+            return Err("Dynamic resources are not available in session-only mode".to_string());
+        }
+
         let client = self
             .sessions
             .programmer_service_mut()
@@ -330,30 +353,32 @@ impl McpServer {
 
     /// Handle tools/list request
     async fn handle_tools_list(&mut self) -> Result<Value, JsonRpcError> {
-        // Fetch dynamic tools on first access if not already loaded
-        if !self.dynamic_tools_loaded {
+        // Fetch dynamic tools on first access if not already loaded (skip in session-only mode)
+        if !self.sessions.session_only && !self.dynamic_tools_loaded {
             let _ = self.refresh_dynamic_tools().await;
         }
 
-        // Merge static tools with dynamic tools
+        // Always show static tools (they require authentication in session-only mode)
         let mut all_tools = tools::get_tools();
 
-        // Add dynamic tools
-        for dynamic_tool in &self.dynamic_tools {
-            all_tools.push(dynamic_tool.to_mcp_tool());
-        }
+        // Add dynamic tools (only in non-session-only mode)
+        if !self.sessions.session_only {
+            for dynamic_tool in &self.dynamic_tools {
+                all_tools.push(dynamic_tool.to_mcp_tool());
+            }
 
-        // Add the refresh_dynamic_tools meta-tool
-        all_tools.push(Tool {
-            name: "moo_refresh_dynamic_tools".to_string(),
-            description: "Refresh the list of dynamic tools from the MOO world. \
-                Call this after tools have been added or modified in #0:external_agent_tools()."
-                .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {}
-            }),
-        });
+            // Add the refresh_dynamic_tools meta-tool
+            all_tools.push(Tool {
+                name: "moo_refresh_dynamic_tools".to_string(),
+                description: "Refresh the list of dynamic tools from the MOO world. \
+                    Call this after tools have been added or modified in #0:external_agent_tools()."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            });
+        }
 
         // Session lifecycle meta-tools
         all_tools.push(Tool {
@@ -899,6 +924,14 @@ impl McpServer {
 
     /// Handle resources/list request
     async fn handle_resources_list(&mut self) -> Result<Value, JsonRpcError> {
+        // In session-only mode, no resources are available
+        if self.sessions.session_only {
+            let result = ResourcesListResult {
+                resources: Vec::new(),
+            };
+            return Ok(serde_json::to_value(result).unwrap());
+        }
+
         // Fetch dynamic resources on first access if not already loaded
         if !self.dynamic_resources_loaded {
             let _ = self.refresh_dynamic_resources().await;

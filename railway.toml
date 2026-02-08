@@ -1,0 +1,41 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.railway"
+buildTimeout = 1800
+
+[deploy]
+startCommand = ""
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ALWAYS"
+
+# Persistent volume for database and core
+[[services.volumes]]
+type = "persistent"
+name = "data"
+mountPath = "/data"
+
+# Exposed ports
+[[services.ports]]
+port = 8080
+type = "HTTP"
+
+[[services.ports]]
+port = 8081
+type = "TCP"
+
+[[services.ports]]
+port = 8888
+type = "TCP"
+
+[env]
+PORT = "8080"
+RUN_DIR = "run-cowbell"
+BUILD_PROFILE = "release-fast"
+IMPORT_PATH = "/data/cores/cowbell/src"
+USE_BOOLEAN_RETURNS = "true"
+CUSTOM_ERRORS = "true"
+USE_UUOBJIDS = "true"
+ANONYMOUS_OBJECTS = "true"
+ENABLE_EVENTLOG = "true"
+MCP_CREATION_POLICY = "open"

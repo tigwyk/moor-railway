@@ -98,8 +98,12 @@ struct Args {
     #[arg(long, default_value = "false")]
     debug: bool,
 
+    /// Run in session-only mode: no pre-configured service connections, agents must authenticate first
+    #[arg(long, default_value = "false")]
+    session_only: bool,
+
     /// Policy for agent account creation: open, token, admin-only, disabled
-    #[arg(long, default_value = "disabled")]
+    #[arg(long, default_value = "open")]
     creation_policy: String,
 
     /// Token required for account creation when policy is 'token'
@@ -198,6 +202,9 @@ async fn main() -> Result<()> {
     info!("Creation policy: {creation_policy}");
     info!("Max sessions: {}", args.max_sessions);
     info!("Session idle TTL: {}", args.session_idle_ttl);
+    if args.session_only {
+        info!("Session-only mode: enabled (no service connections)");
+    }
 
     // Create the session manager
     let sessions = SessionManager::new(
@@ -208,6 +215,7 @@ async fn main() -> Result<()> {
         session_idle_ttl,
         creation_policy,
         args.creation_token,
+        args.session_only,
     );
 
     // Create MCP server

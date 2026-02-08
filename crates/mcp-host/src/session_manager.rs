@@ -183,6 +183,8 @@ pub struct SessionManager {
     session_idle_ttl: Duration,
     creation_policy: CreationPolicy,
     creation_token: Option<String>,
+    /// When true, no service connections are used and all tools require an active session
+    pub session_only: bool,
 }
 
 impl SessionManager {
@@ -195,6 +197,7 @@ impl SessionManager {
         session_idle_ttl: Duration,
         creation_policy: CreationPolicy,
         creation_token: Option<String>,
+        session_only: bool,
     ) -> Self {
         Self {
             config,
@@ -207,6 +210,7 @@ impl SessionManager {
             session_idle_ttl,
             creation_policy,
             creation_token,
+            session_only,
         }
     }
 
@@ -327,6 +331,11 @@ impl SessionManager {
     /// Check if programmer credentials are configured
     pub fn has_programmer_credentials(&self) -> bool {
         self.programmer_credentials.is_some()
+    }
+
+    /// Check if service connections are available (not in session-only mode)
+    pub fn has_service_connections(&self) -> bool {
+        !self.session_only
     }
 
     /// Create a new player session

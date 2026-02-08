@@ -88,3 +88,13 @@ processes:
     depends_on:
       moor-daemon:
         condition: process_started
+
+  # Stdio-based MCP server invoked by AI clients; not auto-started.
+  moor-mcp-host:
+    command: >
+      cargo run --release -p moor-mcp-host --
+
+    disabled: true
+    depends_on:
+      moor-daemon:
+        condition: process_started
