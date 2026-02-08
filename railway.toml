@@ -1,44 +1,49 @@
-# mooR Multi-Service Railway Configuration
-# https://docs.railway.com/deployments/monorepo
+# mooR on Railway - Multi-Service Configuration
+# All services pull from pre-built DockerHub images
 
-# Daemon Service - Core MOO database and RPC server
-[daemon.build]
+# ============================================================================
+# DAEMON SERVICE - Core MOO database and RPC server
+# ============================================================================
+[daemon]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile.railway"
-buildTimeout = 1800
+dockerfilePath = "Dockerfile.daemon"
 
 [daemon.deploy]
-healthcheckPath = "/health"
-healthcheckTimeout = 300
 restartPolicyType = "ALWAYS"
+startCommand = ""
 
-[[daemon.deploy.volumes]]
-type = "persistent"
-name = "data"
-mountPath = "/data"
-
-[[daemon.deploy.ports]]
+# Expose all TCP ports for inter-service communication
+[[daemon.ports]]
 port = 7899
 type = "TCP"
 
-[[daemon.deploy.ports]]
+[[daemon.ports]]
 port = 7898
 type = "TCP"
 
-[[daemon.deploy.ports]]
+[[daemon.ports]]
 port = 7897
 type = "TCP"
 
-[[daemon.deploy.ports]]
+[[daemon.ports]]
 port = 7896
 type = "TCP"
 
-[[daemon.deploy.ports]]
+[[daemon.ports]]
 port = 7900
 type = "TCP"
 
+# Persistent volume for database
+[[daemon.volumes]]
+type = "persistent"
+name = "daemon-data"
+mountPath = "/data"
+
 [daemon.env]
-BUILD_PROFILE = "release-fast"
+# Use DockerHub image
+RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-daemon:latest"
+
+# Core configuration
 IMPORT_PATH = "/data/cores/cowbell/src"
 USE_BOOLEAN_RETURNS = "true"
 CUSTOM_ERRORS = "true"
@@ -46,75 +51,114 @@ USE_UUOBJIDS = "true"
 ANONYMOUS_OBJECTS = "true"
 ENABLE_EVENTLOG = "true"
 
-# Telnet Host Service
-[telnet.build]
+# ============================================================================
+# TELNET SERVICE - Classic telnet interface
+# ============================================================================
+[telnet]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.telnet"
-buildTimeout = 1800
 
 [telnet.deploy]
 restartPolicyType = "ALWAYS"
+startCommand = ""
 
-[[telnet.deploy.volumes]]
+[[telnet.ports]]
+port = 8888
+type = "TCP"
+
+[[telnet.volumes]]
 type = "persistent"
 name = "telnet-data"
 mountPath = "/data"
 
-[[telnet.deploy.ports]]
-port = 8888
-type = "TCP"
-
 [telnet.env]
-BUILD_PROFILE = "release-fast"
+# Use DockerHub image
+RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-telnet-host:latest"
 
-# Web Host Service
-[webhost.build]
+# Connect to daemon via Railway service discovery
+DAEMON_SERVICE_NAME = "daemon"
+DAEMON_RPC_PORT = "7899"
+DAEMON_EVENTS_PORT = "7898"
+DAEMON_ENROLLMENT_PORT = "7900"
+
+# ============================================================================
+# WEB HOST SERVICE - HTTP/WebSocket API
+# ============================================================================
+[webhost]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.web-host.railway"
-buildTimeout = 1800
 
 [webhost.deploy]
 restartPolicyType = "ALWAYS"
+startCommand = ""
 
-[[webhost.deploy.volumes]]
-type = "persistent"
-name = "web-data"
-mountPath = "/data"
-
-[[webhost.deploy.ports]]
+[[webhost.ports]]
 port = 8081
 type = "TCP"
 
-[webhost.env]
-BUILD_PROFILE = "release-fast"
+[[webhost.volumes]]
+type = "persistent"
+name = "webhost-data"
+mountPath = "/data"
 
-# Worker Service
-[worker.build]
+[webhost.env]
+# Use DockerHub image
+RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-web-host:latest"
+
+# Connect to daemon via Railway service discovery
+DAEMON_SERVICE_NAME = "daemon"
+DAEMON_RPC_PORT = "7899"
+DAEMON_EVENTS_PORT = "7898"
+DAEMON_ENROLLMENT_PORT = "7900"
+
+# ============================================================================
+# WORKER SERVICE - Background HTTP request processing
+# ============================================================================
+[worker]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.worker.railway"
-buildTimeout = 1800
 
 [worker.deploy]
 restartPolicyType = "ALWAYS"
+startCommand = ""
 
-[[worker.deploy.volumes]]
+[[worker.volumes]]
 type = "persistent"
 name = "worker-data"
 mountPath = "/data"
 
 [worker.env]
-BUILD_PROFILE = "release-fast"
+# Use DockerHub image
+RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-worker:latest"
 
-# Frontend Service
-[frontend.build]
+# Connect to daemon via Railway service discovery
+DAEMON_SERVICE_NAME = "daemon"
+DAEMON_RPC_PORT = "7899"
+DAEMON_EVENTS_PORT = "7898"
+DAEMON_WORKERS_REQUEST_PORT = "7896"
+DAEMON_WORKERS_RESPONSE_PORT = "7897"
+DAEMON_ENROLLMENT_PORT = "7900"
+
+# ============================================================================
+# FRONTEND SERVICE - Meadow web UI
+# ============================================================================
+[frontend]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.frontend.railway"
-buildTimeout = 1800
 
 [frontend.deploy]
 restartPolicyType = "ALWAYS"
+startCommand = ""
 healthcheckPath = "/"
 
-[[frontend.deploy.ports]]
+[[frontend.ports]]
 port = 80
 type = "HTTP"
+
+[frontend.env]
+# Use DockerHub image
+RAILWAY_DEPLOY_IMAGE_NAME = "tigwyk/moor-frontend:latest"
+
+# Connect to webhost via Railway service discovery
+WEB_HOST_SERVICE_NAME = "webhost"
+WEB_HOST_PORT = "8081"

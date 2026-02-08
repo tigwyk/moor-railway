@@ -1,0 +1,20 @@
+# Exclude large directories for faster Railway deployments
+target/
+.moor-data/
+ipc/
+local-share/
+config/
+moor-data/
+
+# Exclude development files
+*.md
+.env*
+.forgejo/
+.github/
+clients/meadow/node_modules/
+clients/moor-web-mcp/node_modules/
+clients/web-sdk/node_modules/
+
+# Exclude deployment configs we don't need
+deploy/railway/
+deploy/*/
