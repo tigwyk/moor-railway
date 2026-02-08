@@ -15,11 +15,9 @@ COPY ./Cargo.toml ./Cargo.toml
 COPY ./Cargo.lock ./Cargo.lock
 COPY ./.git ./.git
 
-# Build release binaries
+# Build release binaries (no cache mounts for Railway compatibility)
 ARG BUILD_PROFILE=release-fast
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/moor-build/target \
-    cargo build --profile $BUILD_PROFILE --jobs 6 && \
+RUN cargo build --profile $BUILD_PROFILE --jobs 6 && \
     cp -r target/$BUILD_PROFILE /moor-build/target-final
 
 # Frontend build stage
