@@ -54,9 +54,11 @@ debian-pkg*/
 .dockerignore
 docker-compose.yml
 
-# Deployment scripts (but keep railway deployment files)
+# Deployment scripts (but keep railway deployment files and meadow client)
 deploy/*
 !deploy/railway/
+clients/*
+!clients/meadow/
 
 # Local development config
 .env
