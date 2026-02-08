@@ -39,3 +39,4 @@ USE_UUOBJIDS = "true"
 ANONYMOUS_OBJECTS = "true"
 ENABLE_EVENTLOG = "true"
 MCP_CREATION_POLICY = "open"
+# Force rebuild Sat Feb  7 21:40:56 PST 2026
