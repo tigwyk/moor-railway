@@ -1,1 +1,33 @@
-FROM tigwyk/moor-frontend:latest
+# Stage 1: Build meadow frontend from source
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+
+# Install git (used by build for __GIT_HASH__, falls back to "unknown")
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+# Copy dependency manifests and registry config
+COPY clients/meadow/package.json clients/meadow/package-lock.json ./
+COPY clients/meadow/.npmrc ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy meadow source and build
+COPY clients/meadow/ ./
+RUN npm run build
+
+# Stage 2: Serve with nginx
+FROM nginx:alpine
+
+# Copy built frontend assets
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Copy Railway nginx config
+COPY deploy/railway/nginx-railway.conf /etc/nginx/nginx.conf
+RUN rm -f /etc/nginx/conf.d/default.conf /etc/nginx/templates/default.conf.template
+
+# Copy skill.md for AI agent documentation
+COPY doc/skill.md /usr/share/nginx/html/skill.md
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

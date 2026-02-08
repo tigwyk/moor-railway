@@ -1,1 +1,16 @@
 FROM tigwyk/moor-worker:latest
+
+COPY deploy/railway/worker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV DAEMON_HOST=daemon.railway.internal
+ENV DAEMON_RPC_PORT=7899
+ENV DAEMON_EVENTS_PORT=7898
+ENV DAEMON_WORKERS_REQUEST_PORT=7896
+ENV DAEMON_WORKERS_RESPONSE_PORT=7897
+ENV DAEMON_ENROLLMENT_PORT=7900
+ENV DATA_DIR=/data
+ENV XDG_CONFIG_HOME=/data/config
+ENV XDG_DATA_HOME=/data/local-share
+
+ENTRYPOINT ["/entrypoint.sh"]

@@ -5,16 +5,31 @@ ipc/
 local-share/
 config/
 moor-data/
+run-cowbell/
+export/
 
 # Exclude development files
-*.md
 .env*
 .forgejo/
 .github/
+
+# Exclude client node_modules
 clients/meadow/node_modules/
 clients/moor-web-mcp/node_modules/
 clients/web-sdk/node_modules/
 
-# Exclude deployment configs we don't need
-deploy/railway/
-deploy/*/
+# Exclude source code (using pre-built DockerHub images)
+crates/
+tools/
+book/
+doc/
+!doc/skill.md
+cores/
+
+# Exclude other deployment configs
+deploy/kubernetes/
+deploy/debian-packages/
+deploy/telnet-only/
+deploy/web-basic/
+deploy/web-ssl/
+deploy/release/

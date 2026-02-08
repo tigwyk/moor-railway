@@ -1,5 +1,5 @@
 # mooR Railway Monorepo Configuration
-# Each service uses a minimal Dockerfile that pulls from DockerHub
+# Each service uses a Dockerfile that extends pre-built DockerHub images
 
 # ============================================================================
 # DAEMON SERVICE
@@ -11,7 +11,6 @@ dockerfilePath = "Dockerfile.daemon"
 restartPolicyType = "ALWAYS"
 numReplicas = 1
 
-# TCP ports for inter-service communication
 [[daemon.ports]]
 port = 7899
 type = "TCP"
@@ -32,7 +31,6 @@ type = "TCP"
 port = 7900
 type = "TCP"
 
-# Persistent volume for database
 [[daemon.volumes]]
 type = "persistent"
 name = "daemon-data"
@@ -66,7 +64,7 @@ name = "telnet-data"
 mountPath = "/data"
 
 [telnet.env]
-DAEMON_SERVICE_NAME = "daemon"
+DAEMON_HOST = "daemon.railway.internal"
 DAEMON_RPC_PORT = "7899"
 DAEMON_EVENTS_PORT = "7898"
 DAEMON_ENROLLMENT_PORT = "7900"
@@ -91,7 +89,7 @@ name = "webhost-data"
 mountPath = "/data"
 
 [webhost.env]
-DAEMON_SERVICE_NAME = "daemon"
+DAEMON_HOST = "daemon.railway.internal"
 DAEMON_RPC_PORT = "7899"
 DAEMON_EVENTS_PORT = "7898"
 DAEMON_ENROLLMENT_PORT = "7900"
@@ -112,12 +110,34 @@ name = "worker-data"
 mountPath = "/data"
 
 [worker.env]
-DAEMON_SERVICE_NAME = "daemon"
+DAEMON_HOST = "daemon.railway.internal"
 DAEMON_RPC_PORT = "7899"
 DAEMON_EVENTS_PORT = "7898"
 DAEMON_WORKERS_REQUEST_PORT = "7896"
 DAEMON_WORKERS_RESPONSE_PORT = "7897"
 DAEMON_ENROLLMENT_PORT = "7900"
+
+# ============================================================================
+# MCP GATEWAY SERVICE
+# ============================================================================
+[mcp-gateway.build]
+dockerfilePath = "Dockerfile.mcp-gateway"
+
+[mcp-gateway.deploy]
+restartPolicyType = "ALWAYS"
+numReplicas = 1
+
+[[mcp-gateway.volumes]]
+type = "persistent"
+name = "mcp-gateway-data"
+mountPath = "/data"
+
+[mcp-gateway.env]
+DAEMON_HOST = "daemon.railway.internal"
+DAEMON_RPC_PORT = "7899"
+DAEMON_EVENTS_PORT = "7898"
+DAEMON_ENROLLMENT_PORT = "7900"
+MCP_CREATION_POLICY = "open"
 
 # ============================================================================
 # FRONTEND SERVICE

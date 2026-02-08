@@ -1,0 +1,28 @@
+FROM tigwyk/moor-daemon:latest AS moor-bins
+
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libssl3 libsodium23 ca-certificates bash && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir mcp-proxy
+
+COPY --from=moor-bins /moor/moor-mcp-host /usr/local/bin/moor-mcp-host
+
+COPY deploy/railway/mcp-gateway-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV DAEMON_HOST=daemon.railway.internal
+ENV DAEMON_RPC_PORT=7899
+ENV DAEMON_EVENTS_PORT=7898
+ENV DAEMON_ENROLLMENT_PORT=7900
+ENV MCP_GATEWAY_PORT=8090
+ENV MCP_CREATION_POLICY=open
+ENV DATA_DIR=/data
+ENV XDG_CONFIG_HOME=/data/config
+ENV XDG_DATA_HOME=/data/local-share
+
+EXPOSE 8090
+
+ENTRYPOINT ["/entrypoint.sh"]

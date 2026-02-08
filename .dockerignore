@@ -38,6 +38,7 @@ development-export/
 
 # All markdown files
 *.md
+!doc/skill.md
 
 # CI/CD
 .forgejo/
