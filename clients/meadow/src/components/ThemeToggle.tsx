@@ -15,17 +15,17 @@ import React from "react";
 import { useTheme } from "./ThemeProvider";
 import { type Theme } from "./themeSupport";
 
-const THEME_SEQUENCE: Theme[] = ["dark", "light", "crt", "crt-amber"];
+const THEME_SEQUENCE: Theme[] = ["dark", "light", "moltbook", "crt", "crt-amber"];
 
 /**
- * Theme toggle component for switching between dark, light, and CRT modes
+ * Theme toggle component for switching between dark, light, moltbook, and CRT modes
  *
- * @returns A button that cycles between dark, light, and CRT themes
+ * @returns A button that cycles between dark, light, moltbook, and CRT themes
  */
 export const ThemeToggle: React.FC = () => {
     const { theme, setTheme } = useTheme();
 
-    // Cycle through themes: dark -> light -> crt -> crt-amber -> dark
+    // Cycle through themes: dark -> light -> moltbook -> crt -> crt-amber -> dark
     const cycleTheme = () => {
         const currentIndex = THEME_SEQUENCE.indexOf(theme);
         const nextIndex = (currentIndex + 1) % THEME_SEQUENCE.length;
@@ -38,6 +38,8 @@ export const ThemeToggle: React.FC = () => {
                 return "🌙 Dark";
             case "light":
                 return "☀️ Light";
+            case "moltbook":
+                return "🦞 Moltbook";
             case "crt":
                 return "📺 RetroGreen";
             case "crt-amber":

@@ -13,7 +13,7 @@
 
 // ! Shared theme and font helpers for the web client
 
-export type Theme = "dark" | "light" | "crt" | "crt-amber";
+export type Theme = "dark" | "light" | "crt" | "crt-amber" | "moltbook";
 export type FontStyle = "proportional" | "monospace";
 
 export const RETRO_THEMES: ReadonlySet<Theme> = new Set(["crt", "crt-amber"]);
@@ -25,7 +25,7 @@ const hasWindow = () => typeof window !== "undefined";
 const hasDocument = () => typeof document !== "undefined";
 
 export const isTheme = (value: string | null): value is Theme =>
-    value === "dark" || value === "light" || value === "crt" || value === "crt-amber";
+    value === "dark" || value === "light" || value === "crt" || value === "crt-amber" || value === "moltbook";
 
 export const isFontStyle = (value: string | null): value is FontStyle =>
     value === "proportional" || value === "monospace";
@@ -50,7 +50,7 @@ export const resolveInitialFontStyle = (): FontStyle => {
 export const applyThemeToDom = (theme: Theme) => {
     if (!hasDocument()) return;
 
-    document.body.classList.remove("light-theme", "crt-theme", "crt-amber-theme");
+    document.body.classList.remove("light-theme", "crt-theme", "crt-amber-theme", "moltbook-theme");
 
     if (theme === "light") {
         document.body.classList.add("light-theme");
@@ -58,6 +58,8 @@ export const applyThemeToDom = (theme: Theme) => {
         document.body.classList.add("crt-theme");
     } else if (theme === "crt-amber") {
         document.body.classList.add("crt-amber-theme");
+    } else if (theme === "moltbook") {
+        document.body.classList.add("moltbook-theme");
     }
 
     updateScanlines(theme);

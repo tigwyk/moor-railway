@@ -188,6 +188,46 @@
   --crt-amber-color-attribute: #ffbb55;
   --crt-amber-color-regex: #FFA128;
 
+  /* Moltbook Theme Colors - Inspired by moltbook.com */
+  --moltbook-color-bg-base: #2d2d2e;
+  --moltbook-color-bg-primary: #3a3a3b;
+  --moltbook-color-bg-secondary: #1a1a1b;
+  --moltbook-color-bg-tertiary: #252526;
+  --moltbook-color-bg-header: #1a1a1b;
+  --moltbook-color-bg-input: #3a3a3b;
+
+  --moltbook-color-text-primary: #ffffff;
+  --moltbook-color-text-secondary: #cccccc;
+  --moltbook-color-text-header: #ffffff;
+  --moltbook-color-text-accent: #e01b24;
+  --moltbook-color-text-error: #e01b24;
+  --moltbook-color-text-success: #00d4aa;
+  --moltbook-color-text-historical: #888888;
+
+  --moltbook-color-border-light: #3a3a3b;
+  --moltbook-color-border-medium: #4a4a4b;
+  --moltbook-color-border-dark: #5a5a5b;
+
+  --moltbook-color-danger: #e01b24;
+  --moltbook-color-button-primary: #e01b24;
+  --moltbook-color-shadow: rgba(0, 0, 0, 0.4);
+  --moltbook-color-bg-hover: rgba(255, 255, 255, 0.08);
+  --moltbook-color-bg-accent: var(--moltbook-color-text-primary);
+  --moltbook-color-surface-raised: #3a3a3b;
+
+  /* Syntax Highlighting - Moltbook Theme (red and teal accents) */
+  --moltbook-color-keyword: #e01b24;
+  --moltbook-color-constant: #00d4aa;
+  --moltbook-color-type: #00d4aa;
+  --moltbook-color-number: #00d4aa;
+  --moltbook-color-string: #ff6b6b;
+  --moltbook-color-operator: #ffffff;
+  --moltbook-color-variable: #cccccc;
+  --moltbook-color-function: #00d4aa;
+  --moltbook-color-property: #cccccc;
+  --moltbook-color-attribute: #cccccc;
+  --moltbook-color-regex: #ff6b6b;
+
   /* Spacing & Sizing - Shared between themes */
   --space-xs: 0.15em;
   --space-sm: 0.25em;
@@ -763,4 +803,168 @@
   align-self: center;
   min-width: 80px;
   text-align: center;
+}
+
+/* Moltbook Theme Class - Inspired by moltbook.com */
+.moltbook-theme {
+  /* Color Palette - Moltbook Theme */
+  --color-bg-base: var(--moltbook-color-bg-base);
+  --color-bg-primary: var(--moltbook-color-bg-primary);
+  --color-bg-secondary: var(--moltbook-color-bg-secondary);
+  --color-bg-tertiary: var(--moltbook-color-bg-tertiary);
+  --color-bg-header: var(--moltbook-color-bg-header);
+  --color-bg-input: var(--moltbook-color-bg-input);
+
+  /* Text Colors - Moltbook Theme */
+  --color-text-primary: var(--moltbook-color-text-primary);
+  --color-text-secondary: var(--moltbook-color-text-secondary);
+  --color-text-header: var(--moltbook-color-text-header);
+  --color-text-accent: var(--moltbook-color-text-accent);
+  --color-text-error: var(--moltbook-color-text-error);
+  --color-text-success: var(--moltbook-color-text-success);
+  --color-text-historical: var(--moltbook-color-text-historical);
+
+  /* Border Colors - Moltbook Theme */
+  --color-border-light: var(--moltbook-color-border-light);
+  --color-border-medium: var(--moltbook-color-border-medium);
+  --color-border-dark: var(--moltbook-color-border-dark);
+
+  /* Interactive Elements - Moltbook Theme */
+  --color-danger: var(--moltbook-color-danger);
+  --color-button-primary: var(--moltbook-color-button-primary);
+  --color-shadow: var(--moltbook-color-shadow);
+  --color-bg-hover: var(--moltbook-color-bg-hover);
+  --color-bg-accent: var(--moltbook-color-bg-accent);
+  --color-surface-raised: var(--moltbook-color-surface-raised);
+  --color-link: var(--moltbook-color-text-accent);
+  --color-link-hover: #ff3333;
+  --color-text-placeholder: rgba(255, 255, 255, 0.5);
+
+  /* Syntax Highlighting - Moltbook Theme */
+  --color-keyword: var(--moltbook-color-keyword);
+  --color-constant: var(--moltbook-color-constant);
+  --color-type: var(--moltbook-color-type);
+  --color-number: var(--moltbook-color-number);
+  --color-string: var(--moltbook-color-string);
+  --color-operator: var(--moltbook-color-operator);
+  --color-variable: var(--moltbook-color-variable);
+  --color-function: var(--moltbook-color-function);
+  --color-property: var(--moltbook-color-property);
+  --color-attribute: var(--moltbook-color-attribute);
+  --color-regex: var(--moltbook-color-regex);
+
+  /* Moltbook-specific visual effects */
+  background: linear-gradient(180deg, #2d2d2e 0%, #252526 100%);
+
+  /* Subtle shadow on narrative areas */
+  .narrative,
+  .output_window {
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Enhanced button styling */
+  .btn-primary {
+    background: linear-gradient(135deg, #e01b24 0%, #c41820 100%);
+    box-shadow: 0 2px 8px rgba(224, 27, 36, 0.4);
+  }
+
+  .btn-primary:hover {
+    background: linear-gradient(135deg, #ff3333 0%, #e01b24 100%);
+    box-shadow: 0 4px 12px rgba(224, 27, 36, 0.6);
+  }
+
+  /* Success/teal accents */
+  .btn-success {
+    background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%);
+    color: #1a1a1b;
+    border: none;
+  }
+
+  /* Link styling with red accent */
+  a, .btn-link {
+    color: #e01b24;
+  }
+
+  a:hover, .btn-link:hover {
+    color: #ff3333;
+  }
+
+  /* Historical text styling */
+  .history_indicator,
+  .text_historical {
+    color: #888888 !important;
+  }
+
+  /* Teal accent for special elements */
+  .color-accent-teal {
+    color: #00d4aa;
+  }
+
+  .bg-accent-teal {
+    background-color: #00d4aa;
+  }
+
+  /* Red accent for special elements */
+  .color-accent-red {
+    color: #e01b24;
+  }
+
+  .bg-accent-red {
+    background-color: #e01b24;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #1a1a1b;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #4a4a4b;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #5a5a5b;
+  }
+
+  /* Form element styling */
+  input, select, textarea {
+    background-color: #3a3a3b !important;
+    color: #ffffff !important;
+    border: 1px solid #4a4a4b !important;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid #e01b24;
+    outline-offset: -2px;
+    border-color: #e01b24 !important;
+  }
+
+  input::placeholder, textarea::placeholder {
+    color: rgba(255, 255, 255, 0.5) !important;
+  }
+
+  /* Nav/header styling */
+  .nav-title,
+  .settings-header h2,
+  .settings-section h3 {
+    color: #ffffff;
+    border-bottom: 1px solid #4a4a4b;
+    padding-bottom: 0.5rem;
+  }
+
+  /* Teal success indicators */
+  .color-text-success {
+    color: #00d4aa !important;
+  }
+
+  /* Red error indicators */
+  .color-text-error {
+    color: #e01b24 !important;
+  }
 }
