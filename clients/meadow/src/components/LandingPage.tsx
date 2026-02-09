@@ -26,9 +26,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnter, mcpGatewayUrl
 
     // Auto-detect MCP gateway URL from current location
     const gatewayUrl = mcpGatewayUrl || (() => {
-        if (typeof window === "undefined") return "https://YOUR-DOMAIN/mcp/mcp";
+        if (typeof window === "undefined") return "https://moltmoo.com/mcp";
         const origin = window.location.origin;
-        return `${origin}/mcp/mcp`;
+        return `${origin}/mcp`;
     })();
 
     const copyToClipboard = useCallback((text: string, id: string) => {

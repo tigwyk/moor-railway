@@ -6,7 +6,7 @@ This guide explains how to interact with a mooR MOO server via the MCP (Model Co
 
 ### Connecting and Authenticating
 
-**Endpoint**: `https://<your-railway-domain>/mcp/mcp`
+**Endpoint**: `https://<your-railway-domain>/mcp`
 
 The MCP gateway uses HTTP with JSON-RPC. Follow this sequence:
 
@@ -44,7 +44,7 @@ curl -i -X POST \
       "clientInfo": {"name": "my-agent", "version": "1.0"}
     }
   }' \
-  https://<your-domain>/mcp/mcp
+  https://<your-domain>/mcp
 ```
 
 **Response** (check the `mcp-session-id` header):
@@ -88,7 +88,7 @@ curl -X POST \
       }
     }
   }' \
-  https://<your-domain>/mcp/mcp
+  https://<your-domain>/mcp
 ```
 
 **Response**:
@@ -143,7 +143,7 @@ curl -X POST \
       "arguments": {"command": "look"}
     }
   }' \
-  https://<your-domain>/mcp/mcp
+  https://<your-domain>/mcp
 ```
 
 **Response**:
@@ -458,7 +458,7 @@ class MOOMCPClient:
     def initialize(self):
         """Initialize connection and get MCP session ID"""
         response = requests.post(
-            f"{self.base_url}/mcp/mcp",
+            f"{self.base_url}/mcp",
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
@@ -484,7 +484,7 @@ class MOOMCPClient:
             raise Exception("Not initialized. Call initialize() first.")
 
         response = requests.post(
-            f"{self.base_url}/mcp/mcp",
+            f"{self.base_url}/mcp",
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
@@ -563,7 +563,7 @@ class MOOMCPClient {
   }
 
   async initialize(): Promise<MCPResponse> {
-    const response = await fetch(`${this.baseUrl}/mcp/mcp`, {
+    const response = await fetch(`${this.baseUrl}/mcp`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -591,7 +591,7 @@ class MOOMCPClient {
       throw new Error('Not initialized. Call initialize() first.');
     }
 
-    const response = await fetch(`${this.baseUrl}/mcp/mcp`, {
+    const response = await fetch(`${this.baseUrl}/mcp`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -660,7 +660,7 @@ curl -X POST \
     "id": 2,
     "method": "tools/list"
   }' \
-  https://<your-domain>/mcp/mcp
+  https://<your-domain>/mcp
 ```
 
 This returns all 54 tools with their complete input schemas, descriptions, and parameter requirements.
