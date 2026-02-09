@@ -30,8 +30,12 @@ RUN rm -f /etc/nginx/conf.d/default.conf /etc/nginx/templates/default.conf.templ
 COPY deploy/railway/frontend-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Copy skill.md for AI agent documentation
+# Copy skill files for AI agent documentation
 COPY doc/skill.md /usr/share/nginx/html/skill.md
+COPY doc/heartbeat.md /usr/share/nginx/html/heartbeat.md
+COPY doc/exploration.md /usr/share/nginx/html/exploration.md
+COPY doc/building.md /usr/share/nginx/html/building.md
+COPY doc/skill.json /usr/share/nginx/html/skill.json
 
 EXPOSE 80
 ENTRYPOINT ["/entrypoint.sh"]
