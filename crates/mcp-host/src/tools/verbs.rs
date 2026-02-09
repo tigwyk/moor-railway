@@ -287,6 +287,29 @@ pub fn tool_moo_set_verb_args() -> Tool {
     }
 }
 
+pub fn tool_moo_get_verb_args() -> Tool {
+    Tool {
+        name: "moo_get_verb_args".to_string(),
+        description: "Get a verb's argument specification (dobj, prep, iobj). \
+            Returns the three-part argspec that controls how the verb matches player commands."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "object": {
+                    "type": "string",
+                    "description": "Object reference (e.g., '#123', '$player')"
+                },
+                "verb": {
+                    "type": "string",
+                    "description": "Verb name"
+                }
+            },
+            "required": ["object", "verb"]
+        }),
+    }
+}
+
 // ============================================================================
 // Tool Implementations
 // ============================================================================
@@ -796,6 +819,47 @@ pub async fn execute_moo_set_verb_args(
             "Successfully updated verb args for {}:{}\n  dobj: {}\n  prep: {}\n  iobj: {}",
             object_str, verb_name, dobj, prep, iobj
         ))),
+        MoorResult::Error(msg) => Ok(ToolCallResult::error(msg)),
+    }
+}
+
+pub async fn execute_moo_get_verb_args(
+    client: &mut MoorClient,
+    args: &Value,
+) -> Result<ToolCallResult> {
+    let object_str = args
+        .get("object")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| eyre::eyre!("Missing 'object' parameter"))?;
+
+    let verb_name = args
+        .get("verb")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| eyre::eyre!("Missing 'verb' parameter"))?;
+
+    let escaped_verb = verb_name.replace('\\', "\\\\").replace('"', "\\\"");
+
+    // Use verb_args() builtin to get the argspec
+    let expr = format!(r#"return verb_args({}, "{}");"#, object_str, escaped_verb);
+
+    match client.eval(&expr).await? {
+        MoorResult::Success(var) => {
+            if let Some(list) = var.as_list() {
+                if list.len() >= 3 {
+                    let dobj = format_var(&list[0]);
+                    let prep = format_var(&list[1]);
+                    let iobj = format_var(&list[2]);
+                    Ok(ToolCallResult::text(format!(
+                        "Argspec for {}:{}\n  dobj: {}\n  prep: {}\n  iobj: {}",
+                        object_str, verb_name, dobj, prep, iobj
+                    )))
+                } else {
+                    Ok(ToolCallResult::error("verb_args did not return a valid argspec"))
+                }
+            } else {
+                Ok(ToolCallResult::error("verb_args did not return a list"))
+            }
+        }
         MoorResult::Error(msg) => Ok(ToolCallResult::error(msg)),
     }
 }

@@ -78,6 +78,7 @@ pub fn get_tools() -> Vec<Tool> {
         add_session_id_param(with_wizard_param(verbs::tool_moo_delete_verb())),
         add_session_id_param(with_wizard_param(verbs::tool_moo_set_verb_info())),
         add_session_id_param(with_wizard_param(verbs::tool_moo_set_verb_args())),
+        add_session_id_param(with_wizard_param(verbs::tool_moo_get_verb_args())),
         // Property tools
         add_session_id_param(with_wizard_param(properties::tool_moo_list_properties())),
         add_session_id_param(with_wizard_param(properties::tool_moo_get_property())),
@@ -152,6 +153,7 @@ pub async fn execute_tool(
         "moo_delete_verb" => verbs::execute_moo_delete_verb(client, arguments).await,
         "moo_set_verb_info" => verbs::execute_moo_set_verb_info(client, arguments).await,
         "moo_set_verb_args" => verbs::execute_moo_set_verb_args(client, arguments).await,
+        "moo_get_verb_args" => verbs::execute_moo_get_verb_args(client, arguments).await,
         // Property tools
         "moo_list_properties" => properties::execute_moo_list_properties(client, arguments).await,
         "moo_get_property" => properties::execute_moo_get_property(client, arguments).await,
