@@ -7,6 +7,11 @@ set -e
 RESOLVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)
 RESOLVER=${RESOLVER:-8.8.8.8}
 
+# Nginx requires IPv6 addresses in brackets: [fd12::10]
+case "$RESOLVER" in
+    *:*) RESOLVER="[$RESOLVER]" ;;
+esac
+
 echo "Using DNS resolver: $RESOLVER"
 
 # Substitute __RESOLVER__ placeholder in nginx config
